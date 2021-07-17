@@ -1,0 +1,357 @@
+;
+;
+; loader
+;
+
+
+	include 'hfs.aii'
+
+	string asis
+	blanks on
+
+buffer	equ $3000
+file_not_found  equ     $46
+
+dp	record 0
+_dp	ds.w 1
+ptr	ds.1 1
+path	ds.l 1
+
+; readfile
+eof	ds.l 1
+ft	ds.w 0
+at	ds.w 0
+
+	endr
+
+header	proc
+
+	import readfile, getbootname, getfstname, startup
+	entry auxtype
+
+	jmp startup
+	nop
+
+	dc.w readfile
+	dc.w getbootname
+	dc.w getfstname
+	dc.w startup-header ; size of permanent code
+auxtype	dc.w 0
+
+	endp
+
+
+data	record
+; store catalog info
+slot		ds.w 0
+unit		ds.w 0
+vector		ds.w 0
+
+cat_extents	ds.w 6
+file_extents	ds.w 6
+
+cat_block	dc.w 0
+
+system_id	dc.l 0
+fsts_id		dc.l 0
+driver_id	dc.l 0
+
+	endr
+
+
+getbootname proc
+	; getbootname(GSString *)
+
+	with dp
+
+	tcd ; save
+	pea fakedp
+	pld
+
+	plx ; rts
+	ply
+	sty ptr
+	ply
+	sty ptr+2
+	phx
+
+	pha ; saved d
+
+	phb
+	phk
+	plb
+
+; get the volume name from the HFS MDB....
+	lda #buffer
+	sta pro.buffer
+	lda #2
+	jsr read_block_abs
+	bcs exit	
+
+	with HFSMasterDirectoryBlock
+	lda buffer+drVN
+	and #$ff
+	sta [ptr]
+	inc a
+	lsr a
+	tax ; count
+
+	ldy #2
+@loop	lda buffer+drVN-1,y
+	sta [ptr],y
+	iny
+	iny
+	dex
+	bpl @loop
+
+	clc
+	lda #0
+
+exit
+	plb
+	pld
+	rts
+
+	endp	
+
+
+getfstname proc
+	; getfstname(GSString *)
+
+	with dp
+
+	tcd ; save
+	pea fakedp
+	pld
+
+	plx ; rts
+	ply
+	sty ptr
+	ply
+	sty ptr+2
+	phx
+
+	pha ; save d
+
+	phb
+	phk
+	plb
+
+	ldy #10-2 ; 7 + 2 + 1 byte to round up.
+
+@loop	lda name,y
+	sta [ptr],y
+	dey
+	dey
+	bpl @loop
+
+	plb
+	pld
+	clc
+	lda #0
+	rts
+
+name	dc.w 7
+	dc.b 'hfs.fst'
+	dc.b 0
+
+	endp
+
+
+
+readfile proc
+; (eof, aux type, file type) readfile(GSString *, void *)
+	with dp
+
+	tcd ; save
+	pea fakedp
+	pld
+
+	plx ; rts
+	ply
+	sty ptr ; data buffer
+	ply
+	sty ptr+2
+	ply
+	sty path ; pathname 
+	ply
+	sty path+2
+	phx
+
+	pha ; save d
+
+	phb
+	phk
+	plb
+
+
+	lda [path]
+	cmp #8
+	blt notfound
+
+
+
+; ...
+
+	; stack: b, d, rts,
+	lda ft
+	sta 3+3,s
+	lda at
+	sta 5+3,s
+	lda eof
+	sta 7+3,s
+	lda eof+2
+	sta 9+3,s
+
+	lda #0
+	clc
+exit
+	plb
+	pld
+	rts
+
+	endp
+
+find_parent proc
+	
+	with dp
+
+; optimism
+	stz offset
+	lda system_id
+	sta parent_id
+
+
+	lda [path]
+	cmp #8
+	blt err
+
+; SYSTEM ?
+	ldx #3
+@loop
+	lda [path],y
+	cmp s1,y
+	bne err
+	iny
+	iny
+	dex
+	bne @loop
+
+	lda [path],y
+	iny
+	sty offset
+
+	cmp #'D:'
+	beq d
+	cmp #'F:'
+	beq f
+
+	and #$ff
+	cmp #':'
+	beq s
+err	lda #file_not_found
+	sec
+	rts
+
+s
+	clc
+	rts
+	; check for more ':' ?
+
+d	; check for a driver folder.
+	lda [path]
+	cmp #16
+	blt s
+	ldx #4
+@loop	lda [path],y
+	cmp s2,y
+	bne s
+	iny
+	iny
+	dex
+	bne @loop
+	; match!
+	sty offset
+	lda driver_id
+	sta parent_id
+	clc
+	rts
+
+f	; check for FSTs folder
+	lda [path]
+	cmp #13
+	blt s
+	ldx #2
+@loop	lda [path],y
+	cmp s3,y
+	bne s
+	iny
+	iny
+	dex
+	bne @loop
+	lda [path],y
+	and #$ff
+	cmp #':'
+	bne s
+	iny
+	sty offset
+	lda fsts_id
+	sta parent_id
+	clc
+	rts
+
+s1	dc.b 'xxSYSTEM:'
+s2	dc.b 'xxSYSTEM:DRIVERS:'
+s3	dc.b 'xxSYSTEM:FSTS:'
+
+
+	endp
+
+
+;
+; everything below here will be clobbered.
+;
+startup proc
+;
+; load the catalog extents
+; lookup :system, :system:driver, :system:fsts, system:system:setup folders to save time later?
+;
+;
+
+; read :system:start.gsos, load into memory @ $6800
+; aux type is stored in auxtype
+
+	with dp
+
+; assume 16-bit, etc.   
+
+	stx slot
+	sty vector
+	sta unit
+
+	pea fakedp
+	pld
+
+; ....
+
+	lda at
+	sta auxtype
+
+	lda #$1000
+	ldx #0
+	ldy #0
+	jmp $6803
+
+	endp
+
+
+find_dir_ids
+
+	; search for SYSTEM, SYSTEM:DRIVERS and SYSTEM:FSTS folders
+	; and store their directory ids to simplify lookup later.
+
+
+fakedp	proc
+	end
+
+	end
