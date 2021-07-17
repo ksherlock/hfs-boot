@@ -1,0 +1,171 @@
+
+	include 'hfs.aii'
+
+boot	proc
+
+	stz offset
+	lda #2
+	jsr read_block
+
+
+	endp
+
+read_block proc
+	; input
+	; a = hfs block #
+	; will be adjusted for allocation block offset
+	; 
+	clc
+	adc offset
+	sta block
+	phx
+	phy
+
+	ply
+	plx
+	rts
+	endp
+
+findit	proc
+;
+; assumes 512-byte blocks (max size = ....?)
+;
+; wait a minute... max 65535 blocks, therefore high word of allocation block, etc, always 0.
+;
+
+;
+; search for a file named ! in the root directory.
+; ! is ascii char $21 so it should sort early.
+;
+;
+	lda header+drAlBlSt
+	xba
+	sta offset
+
+	lda header+drCTExtRec ; 1st allocation block
+	xba
+	sta cat_extents
+	lda header+drCTExtRec+2 ; # of allocation blocks
+	xba
+	sta cat_extents+2
+	;
+	; need to do all 3?
+	;
+
+;	lda offset
+;	clc
+;	adc cat_extents
+	lda cat_extents
+	jsr read_block
+
+	;
+	; block should be a btree header block. find the first leaf node.
+	;
+	lda block+$18
+	xba
+	sta leaf+2
+	lda block+$18+2
+	xba
+	sta leaf
+	;
+	; assert leaf < # allocated lbocks?
+	;
+	;lda leaf
+	jsr read_block
+
+	lda block+$a ; # of records
+	xba
+;	asl a ; x 2
+;	sec
+;	sbc #512
+;	eor #-1
+;	inc a
+;	adc #-513 ; carry will be clear. +1 to avoid inc
+;	eor #-1
+	sta count
+	beq advance
+
+again
+	ldx #512-2 ; last entry 
+@loop
+	lda block,x
+	tay
+	lda block+2,y ; parent id
+	bne notfound
+	lda block+4,y
+	xba
+	cmp #2
+	blt @next
+	beq @name
+	bge notfound
+@name	; name is a p-string.
+	lda block+6+1,y
+	and #$ff
+	cmp #'!'
+	blt @next
+	beq @name2
+	bge notfound
+@name2	lda block+6,y
+	cmp #$2101
+	bne notfound
+	brl found
+@next	dex
+	dex
+	dec count
+	bne @loop
+advance ; next block!
+	lda block+2
+	beq notfound
+	xba
+	jsr read_block
+	bra again
+
+notfound
+	brk $ea
+
+found
+	; y = offset in block
+	;
+	; only works with contiguous files....
+	; first block?
+
+	; assume < 65535 bytes :)
+	lda block+filPyLen+2,y
+;	xba
+	lsr a ; >>9 since already xba
+	and #%01111111
+	beq notfound
+	sta count
+	lda block+filExtRec,y
+	xba
+	sta extent
+	lda block+filExtRec+2,y
+	xba
+	sta extent+2
+
+	; now load the blocks and
+	lda #$2000
+	sta dest
+	lda extent
+	clc
+	adc offset
+	sta block
+@loop
+	jsr read_block2
+	inc block
+	lda #512
+	clc
+	adc dest
+	sta dest
+	dec count
+	bne @loop
+
+	jmp $2000 ; kiss of life.
+
+
+	endp
+
+
+
+
+	end
