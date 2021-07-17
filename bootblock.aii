@@ -12,6 +12,9 @@
 	string asis
 	blanks on
 
+; smartport doesn't currently work ($28 no drive error because the unit isn't setup correctly?)
+__smartport__	set 0
+
 zp	record 0
 slot	ds.w	1
 ;vector	ds.w	1
@@ -23,12 +26,25 @@ extents		ds.b	3*HFSExtentDescriptor.sizeof
 
 	endr
 
+	if __smartport__ then
+sp	record $20
+ReadBlock	equ $01
+pcount	ds.b	1
+unit	ds.b	1
+buffer	ds.w	1
+block	ds.l	1 ; actually 24-bit
+	endr
+
+	else
+
 pro	record $42
 cmd	ds.b 1
 unit	ds.b 1
 buffer	ds.b 2
 block	ds.b 2
 	endr
+
+	endif
 
 data	record $2000
 	ds.b	512
@@ -47,8 +63,11 @@ boot	proc
 
 	dc.b $01 ; prodos boot id :D
 
-
+	if __smartport__ then
+	stx sp.unit
+	else
 	stx pro.unit
+	endif
 	txa
 	lsr a
 	lsr a
@@ -72,17 +91,35 @@ boot	proc
 	lda (slot),y
 	cmp #$03
 	bne noboot
-; smartport - ,7 = 00
+
+	if __smartport__ then
+	ldy #7
+	lda (slot),y
+	bne noboot
+	; ,$fb = smartport id byte which indicates if extended.  not needed (yet)
+	endif
+
 	ldy #$ff
 	lda (slot),y
+	if __smartport__ then
+	inc a
+	inc a
+	inc a
+	endif
 	sta vector
 	bra ok
 
+; not a prodos/smartport device.
 noboot	brk $ea
 
 ok
+	if __smartport__ then
+	lda #3
+	sta sp.pcount
+	else
 	lda #1 ; prodos read block
 	sta pro.cmd
+	endif
 
 	clc
 	xce
@@ -95,7 +132,14 @@ ok
 	stz bnum
 	stz count
 	lda #data
+
+	if __smartport__ then
+	sta sp.buffer
+;	stz sp.block ; will overwrite
+	stz sp.block+2
+	else
 	sta pro.buffer
+	endif
 	lda #2
 	jsr read_block_abs
 
@@ -227,7 +271,11 @@ found
 
 	; now load the blocks and
 	lda #$2000
+	if __smartport__ then
+	sta sp.buffer
+	else
 	sta pro.buffer
+	endif
 	stz bnum
 @loop
 	lda bnum
@@ -235,12 +283,25 @@ found
 	inc bnum
 	lda #512
 	clc
+	if __smartport__ then
+	adc sp.buffer
+	sta sp.buffer
+	else
 	adc pro.buffer
 	sta pro.buffer
+	endif
 	dec count
 	bne @loop
 
-	lda vector ; pass in
+	ldx slot
+	ldy vector
+	if __smartport__ then
+	lda sp.unit
+	else
+	lda pro.unit
+	endif
+	and #$00ff
+
 	jmp $2000 ; kiss of life.
 
 
@@ -263,16 +324,23 @@ read_block_abs
 ;
 ; based on testing, this drops into emulation mode, so do it and recover.
 ;
+
+	if __smartport__ then
+	sta sp.block
+	else
 	sta pro.block
-;	pea @rts-1
-;	sep #$30
+	endif
+
 	php
 	sec
 	xce
 	dc.b $20 ; jsr
 vector	dc.w $ffff
-;	jmp (vector)
-;@rts
+	if __smartport__ then
+	dc.b sp.ReadBlock
+	dc.w sp
+	endif
+
 	bcs @fail
 	xce
 	plp
