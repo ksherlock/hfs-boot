@@ -1,79 +1,145 @@
 
 	include 'hfs.aii'
 
+	string asis
+	blanks on
+
+zp	record 0
+slot	ds.w	1
+vector	ds.w	1
+
+offset		ds.w	1
+bnum		ds.w	1
+count		ds.w	1
+extents		ds.b	3*HFSExtentDescriptor.sizeof
+
+	endr
+
+pro	record $42
+cmd	ds.b 1
+unit	ds.b 1
+buffer	ds.b 2
+block	ds.b 2
+	endr
+
+data	record $2000
+	ds.b	512
+	endr
+
+
+	entry read_block, read_block_abs, read_extent_block
+
 boot	proc
+	longi off
+	longa off
+
+	with zp
+
+
+	dc.b $01 ; prodos boot id :D
+
+
+	stx pro.unit
+	txa
+	lsr a
+	lsr a
+	lsr a
+	lsr a
+	ora #$c0
+	sta vector+1
+	sta slot+1
+	stz slot
+; check for prodos block-device signature bytes
+; todo -- switch to extended smartport? needed for second stage.
+	ldy #1
+	lda (slot),y
+	cmp #$20
+	bne noboot
+	ldy #3
+	lda (slot),y
+	bne noboot
+	ldy #5
+	bne noboot
+; smartport - ,7 = 00
+	ldy #$ff
+	lda (slot),y
+	sta vector
+	bra ok
+
+noboot	brk $ea
+
+ok
+	lda #1 ; prodos read block
+	sta pro.cmd
+
+	clc
+	xce
+	rep #$30
+	longi on
+	longa on
+
 
 	stz offset
+	stz bnum
+	stz count
+	lda #data
+	sta pro.buffer
 	lda #2
-	jsr read_block
+	jsr read_block_abs
 
-
-	endp
-
-read_block proc
-	; input
-	; a = hfs block #
-	; will be adjusted for allocation block offset
-	; 
-	clc
-	adc offset
-	sta block
-	phx
-	phy
-
-	ply
-	plx
-	rts
-	endp
-
-findit	proc
 ;
-; assumes 512-byte blocks (max size = ....?)
+; assumes 512-byte blocks (max size = 64MB)
 ;
 ; wait a minute... max 65535 blocks, therefore high word of allocation block, etc, always 0.
-;
+; i assume hfs use 32-bit links in the btree for in-memory use (24-bit or 32 pointers)
 
 ;
 ; search for a file named ! in the root directory.
 ; ! is ascii char $21 so it should sort early.
 ;
 ;
-	lda header+drAlBlSt
+	with HFSMasterDirectoryBlock
+	lda data+drAlBlSt
 	xba
 	sta offset
 
-	lda header+drCTExtRec ; 1st allocation block
+	lda data+drCTExtRec ; 1st allocation block
 	xba
-	sta cat_extents
-	lda header+drCTExtRec+2 ; # of allocation blocks
+	sta extents
+	lda data+drCTExtRec+2 ; # of allocation blocks
 	xba
-	sta cat_extents+2
+	sta extents+2
 	;
 	; need to do all 3?
 	;
+	endwith
 
 ;	lda offset
 ;	clc
-;	adc cat_extents
-	lda cat_extents
+;	adc extents
+	lda extents
 	jsr read_block
 
 	;
 	; block should be a btree header block. find the first leaf node.
 	;
-	lda block+$18
+	with BTHeaderRec
+;	lda data+BTNodeDescriptor.sizeof+firstLeafNode
+;	xba
+;	sta leaf+2
+	lda data+BTNodeDescriptor.sizeof+firstLeafNode+2
 	xba
-	sta leaf+2
-	lda block+$18+2
-	xba
-	sta leaf
+;	sta bnum
+
+	endwith
 	;
 	; assert leaf < # allocated lbocks?
 	;
 	;lda leaf
-	jsr read_block
+	; s/b leaf + cat extent + offset; todo - this offset is in terms of the catalog extent
+	jsr read_extent_block
 
-	lda block+$a ; # of records
+	lda data+BTNodeDescriptor.numRecords ; # of records
 	xba
 ;	asl a ; x 2
 ;	sec
@@ -88,36 +154,31 @@ findit	proc
 again
 	ldx #512-2 ; last entry 
 @loop
-	lda block,x
+	lda data,x
 	tay
-	lda block+2,y ; parent id
+	lda data+HFSCatalogKey.parentID,y ; parent id
 	bne notfound
-	lda block+4,y
+	lda data+HFSCatalogKey.parentID+2,y
 	xba
 	cmp #2
 	blt @next
 	beq @name
 	bge notfound
 @name	; name is a p-string.
-	lda block+6+1,y
-	and #$ff
-	cmp #'!'
-	blt @next
-	beq @name2
+	lda data+HFSCatalogKey.nodeName,y
+	cmp #$2101 ; pstr !
+	beq found
 	bge notfound
-@name2	lda block+6,y
-	cmp #$2101
-	bne notfound
-	brl found
+
 @next	dex
 	dex
 	dec count
 	bne @loop
 advance ; next block!
-	lda block+2
+	lda data+BTNodeDescriptor.fLink+2
 	beq notfound
 	xba
-	jsr read_block
+	jsr read_extent_block
 	bra again
 
 notfound
@@ -129,42 +190,102 @@ found
 	; only works with contiguous files....
 	; first block?
 
+	; 8 is magic offset for a key named !
+
 	; assume < 65535 bytes :)
-	lda block+filPyLen+2,y
+	with HFSCatalogFile
+	lda data+8+recordType,y
+	and #$00ff
+	cmp #kHFSFileRecord
+	bne notfound
+
+	lda data+8+dataPhysicalSize+2,y
 ;	xba
 	lsr a ; >>9 since already xba
 	and #%01111111
 	beq notfound
 	sta count
-	lda block+filExtRec,y
+	lda data+8+dataExtents,y
 	xba
-	sta extent
-	lda block+filExtRec+2,y
+	sta extents
+	lda data+8+dataExtents+2,y
 	xba
-	sta extent+2
+	sta extents+2
 
 	; now load the blocks and
 	lda #$2000
-	sta dest
-	lda extent
-	clc
-	adc offset
-	sta block
+	sta pro.buffer
+	stz bnum
 @loop
-	jsr read_block2
-	inc block
+	lda bnum
+	jsr read_extent_block
+	inc bnum
 	lda #512
 	clc
-	adc dest
-	sta dest
+	adc pro.buffer
+	sta pro.buffer
 	dec count
 	bne @loop
 
+	lda vector ; pass in
 	jmp $2000 ; kiss of life.
 
 
 	endp
 
+
+read_block proc
+	entry read_block_abs
+
+	; input
+	; a = hfs block #
+	; will be adjusted for allocation block offset
+	;
+	with zp
+	clc
+	adc offset
+
+read_block_abs
+
+	sta pro.block
+	sep #$30
+	jmp (vector)
+	rep #$30
+	bcs @fail
+	; bcs error...
+	rts
+@fail	brk $ea
+	endp
+
+read_extent_block proc
+; a = block #
+
+; This doesn't check beyond the 3rd extent
+
+	with zp,HFSExtentDescriptor
+
+@0
+	cmp extents+0+blockCount
+	bcs @1
+;	clc
+	adc extents+0+startBlock
+	bra read_block
+
+@1	sbc extents+0+blockCount
+	cmp extents+4+blockCount
+	bcs @2
+;	clc
+	adc extents+4+startBlock
+	bra read_block
+
+@2	sbc extents+4+blockCount
+	cmp extents+8+blockCount
+	bcs @3
+	adc extents+8+startBlock
+	bra read_block
+
+@3	brk $ea
+	endp
 
 
 
