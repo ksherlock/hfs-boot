@@ -1,3 +1,11 @@
+;
+; HFS boot.  Boot block.
+; This is stage 0 of the bootloader.  It will find a file named
+; '!' in the root directory of an HFS volume, load it, and execute it
+; in full 16-bit mode, with a = prodos block call vector.
+;
+; this currently only works with 512-byte blocks (max volume size = 64M)
+; but there's enough room to support variable block sizes.
 
 	include 'hfs.aii'
 
@@ -6,7 +14,7 @@
 
 zp	record 0
 slot	ds.w	1
-vector	ds.w	1
+;vector	ds.w	1
 
 offset		ds.w	1
 bnum		ds.w	1
@@ -28,6 +36,7 @@ data	record $2000
 
 
 	entry read_block, read_block_abs, read_extent_block
+	entry vector
 
 boot	proc
 	longi off
@@ -51,6 +60,7 @@ boot	proc
 	stz slot
 ; check for prodos block-device signature bytes
 ; todo -- switch to extended smartport? needed for second stage.
+; xx $20 xx $00 xx $03 [xx $00 - smarport ]
 	ldy #1
 	lda (slot),y
 	cmp #$20
@@ -59,6 +69,8 @@ boot	proc
 	lda (slot),y
 	bne noboot
 	ldy #5
+	lda (slot),y
+	cmp #$03
 	bne noboot
 ; smartport - ,7 = 00
 	ldy #$ff
@@ -103,15 +115,13 @@ ok
 	xba
 	sta offset
 
-	lda data+drCTExtRec ; 1st allocation block
+	ldx #3*HFSExtentDescriptor.sizeof-2
+@cloop	lda data+drCTExtRec,x
 	xba
-	sta extents
-	lda data+drCTExtRec+2 ; # of allocation blocks
-	xba
-	sta extents+2
-	;
-	; need to do all 3?
-	;
+	sta extents,x
+	dex
+	dex
+	bpl @cloop
 	endwith
 
 ;	lda offset
@@ -154,7 +164,8 @@ ok
 again
 	ldx #512-2 ; last entry 
 @loop
-	lda data,x
+	lda data,x ; entry offset
+	xba
 	tay
 	lda data+HFSCatalogKey.parentID,y ; parent id
 	bne notfound
@@ -205,6 +216,8 @@ found
 	and #%01111111
 	beq notfound
 	sta count
+
+	; todo -- all extents...
 	lda data+8+dataExtents,y
 	xba
 	sta extents
@@ -236,6 +249,7 @@ found
 
 read_block proc
 	entry read_block_abs
+	entry vector
 
 	; input
 	; a = hfs block #
@@ -246,13 +260,22 @@ read_block proc
 	adc offset
 
 read_block_abs
-
+;
+; based on testing, this drops into emulation mode, so do it and recover.
+;
 	sta pro.block
-	sep #$30
-	jmp (vector)
-	rep #$30
+;	pea @rts-1
+;	sep #$30
+	php
+	sec
+	xce
+	dc.b $20 ; jsr
+vector	dc.w $ffff
+;	jmp (vector)
+;@rts
 	bcs @fail
-	; bcs error...
+	xce
+	plp
 	rts
 @fail	brk $ea
 	endp
