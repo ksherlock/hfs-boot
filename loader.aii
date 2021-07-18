@@ -295,7 +295,7 @@ prepare_path proc
 	stz r0 ; offset into path
 	lda system_id
 	sta target_parent
-	sta system_id+2
+	lda system_id+2
 	sta target_parent+2
 
 
@@ -665,16 +665,23 @@ eloop
 	bne eloop
 
 advance
-	lda buffer+BTNodeDescriptor.fLink
-	beq @last
-	xba
-	sta bnum
-	bra next_index
+	; wait a minute ... do we ever need to follow the next link?
+	; first entry of next node is always > target.
+	; so we can just descend via prev ptr.
+;	lda buffer+BTNodeDescriptor.fLink+2
+;	beq @last
+;	xba
+;	sta bnum
+;	bra next_index
 @last	; if there was a prev node, descend into it
+	; but not if this is a map node
 	lda prev
-	bmi fnf
 	sta bnum
-	bra descend
+	ora buffer+BTNodeDescriptor.kind-1
+	bpl descend
+;	bmi fnf
+;	sta bnum
+;	bra descend
 
 fnf
 	lda #fileNotFound
