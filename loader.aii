@@ -7,6 +7,7 @@
 
 	include 'hfs.aii'
 	include 'macros.aii'
+	include 'e16.gsos'
 
 	string asis
 	blanks on
@@ -15,21 +16,53 @@
 __smartport__	set 0
 
 buffer	equ $3000
-file_not_found  equ     $46
 
 dp	record 0
-_dp	ds.w 1
-ptr	ds.1 1
+ptr	ds.l 1
 path	ds.l 1
+
+
+r0	ds.w 1
+r1	ds.w 1
+r2	ds.w 1
+r3	ds.w 1
 
 ; readfile
 eof	ds.l 1
+blocks	ds.w 1  ; shouldn't exceed...
 ft	ds.w 1
 at	ds.w 1
 st	ds.w 1
 file_id	ds.l 1
 
 	endr
+
+
+	if __smartport__ then
+sp	record $20
+ReadBlock	equ $01
+pcount	ds.b	1
+unit	ds.b	1
+buffer	ds.w	1
+block	ds.l	1 ; actually 24-bit
+	endr
+
+	else
+
+pro	record $42
+cmd	ds.b 1
+unit	ds.b 1
+buffer	ds.b 2
+block	ds.b 2
+	endr
+
+	endif
+
+
+	entry read_block, read_block_abs
+	entry prepare_path, cat_lookup
+	entry read_cat_block, read_file_block
+
 
 header	proc
 
@@ -50,29 +83,30 @@ auxtype	dc.w 0
 
 data	record
 ; store catalog info
-slot		ds.w 0
-unit		ds.w 0
-vector		ds.w 0
+slot		dc.w 0
+unit		dc.w 0
+vector		dc.w 0
 
-block_offset	ds.w 0
+block_offset	dc.w 0
 
-cat_extents	ds.w 6
-file_extents	ds.w 6
+cat_extents	dcb.w 6, 0
+file_extents	dcb.w 6, 0
 
 cat_root	dc.w 0
 
 system_id	dc.l 0
 fsts_id		dc.l 0
-driver_id	dc.l 0
+drivers_id	dc.l 0
 
 
 ; ctree lookup
 target_parent	dc.l 0
+
 target_str_len	dc.w 0
-target_str	ds.b 32
+target_str	dcb.b 32, 0
 
 cat_str_len	dc.w 0
-cat_str		ds.b 32
+cat_str		dcb.b 32, 0
 
 	endr
 
@@ -82,18 +116,12 @@ getbootname proc
 
 	with dp
 
-	tcd ; save
-	pea fakedp
-	pld
-
 	plx ; rts
 	ply
 	sty ptr
 	ply
 	sty ptr+2
 	phx
-
-	pha ; saved d
 
 	phb
 	phk
@@ -113,6 +141,7 @@ getbootname proc
 	inc a
 	lsr a
 	tax ; count
+	dex
 
 	ldy #2
 @loop	lda buffer+drVN-1,y
@@ -127,7 +156,6 @@ getbootname proc
 
 exit
 	plb
-	pld
 	rts
 
 	endp	
@@ -138,18 +166,12 @@ getfstname proc
 
 	with dp
 
-	tcd ; save
-	pea fakedp
-	pld
-
 	plx ; rts
 	ply
 	sty ptr
 	ply
 	sty ptr+2
 	phx
-
-	pha ; save d
 
 	phb
 	phk
@@ -164,14 +186,12 @@ getfstname proc
 	bpl @loop
 
 	plb
-	pld
 	clc
 	lda #0
 	rts
 
-name	dc.w 7
-	dc.b 'hfs.fst'
-	dc.b 0
+name	str.w 'hfs.fst'
+	dcb.b 1,0
 
 	endp
 
@@ -180,10 +200,6 @@ name	dc.w 7
 readfile proc
 ; (eof, aux type, file type) readfile(GSString *, void *)
 	with dp
-
-	tcd ; save
-	pea fakedp
-	pld
 
 	plx ; rts
 	ply
@@ -196,48 +212,84 @@ readfile proc
 	sty path+2
 	phx
 
-	pha ; save d
-
 	phb
 	phk
 	plb
 
 
-	lda [path]
-	cmp #8
-	blt notfound
+	jsr prepare_path
+	bcs exit
 
+	jsr cat_lookup
+	bcs exit
+
+	; now read file, one block at a time,
+	; and copy to ptr.
+	lda blocks
+	beq rdone
+	stz r0 ; block
+
+@rloop
+	lda r0
+	jsr read_file_block
+	bcs exit
+
+
+	; copy to destination
+	pea buffer>>16 ; src
+	pea buffer
+	pei ptr+2 ; dest
+	pei ptr
+	pea 0 ; count
+	pea 512 
+	_BlockMove
+
+
+	lda ptr
+	clc
+	adc #512
+	sta ptr
+	lda ptr+2
+	adc #0
+	sta ptr+2
+
+	inc r0
+	dec blocks
+	bne @rloop
+
+rdone
 
 
 ; ...
 
-	; stack: b, d, rts,
+	; stack: b, rts,
 	lda ft
-	sta 3+3,s
+	sta 4,s
 	lda at
-	sta 5+3,s
+	sta 6,s
 	lda eof
-	sta 7+3,s
+	sta 8,s
 	lda eof+2
-	sta 9+3,s
+	sta 10,s
 
 	lda #0
 	clc
 exit
 	plb
-	pld
 	rts
 
 	endp
 
-find_parent proc
+prepare_path proc
 	
-	with dp
+	with dp, data
 
 ; optimism
-	stz offset
+	stz r0 ; offset into path
 	lda system_id
-	sta parent_id
+	sta target_parent
+	sta system_id+2
+	sta target_parent+2
 
 
 	lda [path]
@@ -257,7 +309,7 @@ find_parent proc
 
 	lda [path],y
 	iny
-	sty offset
+	sty r0
 
 	cmp #'D:'
 	beq d
@@ -266,43 +318,42 @@ find_parent proc
 
 	and #$ff
 	cmp #':'
-	beq s
-err	lda #file_not_found
+	beq sys
+err	lda #fileNotFound
 	sec
 	rts
 
-s
-	clc
-	rts
+sys	brl target
 	; check for more ':' ?
 
 d	; check for a driver folder.
 	lda [path]
 	cmp #16
-	blt s
+	blt sys
 	ldx #4
 @loop	lda [path],y
 	cmp s2,y
-	bne s
+	bne sys
 	iny
 	iny
 	dex
 	bne @loop
 	; match!
-	sty offset
-	lda driver_id
-	sta parent_id
-	clc
-	rts
+	sty r0
+	lda drivers_id
+	sta target_parent
+	lda drivers_id+2
+	sta target_parent+2
+	brl target
 
 f	; check for FSTs folder
 	lda [path]
 	cmp #13
-	blt s
+	blt sys
 	ldx #2
 @loop	lda [path],y
 	cmp s3,y
-	bne s
+	bne sys
 	iny
 	iny
 	dex
@@ -310,13 +361,60 @@ f	; check for FSTs folder
 	lda [path],y
 	and #$ff
 	cmp #':'
-	bne s
+	bne sys
 	iny
-	sty offset
+	sty r0
 	lda fsts_id
-	sta parent_id
+	sta target_parent
+	lda fsts_id+2
+	sta target_parent+2
+
+	; drop through
+
+target
+; now set target_str / len
+	lda [path]
+	sec
+	sbc r0
+	beq fnf ; close enough
+	sta target_str_len
+	cmp #16
+	bcs fnf
+
+	ldx #30
+@zloop	stz target_str,x
+	dex
+	dex
+	bpl @zloop
+
+	short m
+	ldx #0
+@loop
+	lda [path],y
+	cmp #':'
+	beq fnf
+	cmp #'z'+1
+	bge @next
+	cmp #'a'
+	blt @next
+	and #$ff xor $20
+
+@next	sta target_str_len,x
+	iny
+	inx
+	cpx target_str_len
+	blt @loop
+
+	long m
+	lda #0
 	clc
 	rts
+
+fnf	long m
+	lda #fileNotFound
+	sec
+	rts
+
 
 s1	dc.b 'xxSYSTEM:'
 s2	dc.b 'xxSYSTEM:DRIVERS:'
@@ -378,6 +476,12 @@ vector	dc.w $ffff
 
 cat_lookup proc
 
+	with data
+
+bnum	equ dp.r0
+prev	equ dp.r1
+count	equ dp.r2
+
 	; search for a file and a parent directory.
 
 	lda cat_root
@@ -405,15 +509,15 @@ eloop
 	xba
 	cmp target_parent+2
 	beq @p2
-	blt lt
-	bge gt
+	blt @lt
+	bge @gt
 
 @p2	lda data+HFSCatalogKey.parentID+2,y
 	xba
-	cmp target_parent+2
+	cmp target_parent
 	beq @nm
-	blt lt
-	bge gt
+	blt @lt
+	bge @gt
 
 @gt
 	; if this is an index node,
@@ -428,6 +532,7 @@ eloop
 
 ; now do a name check....
 ; target_name is UPPER CASE
+@nm
 	jsr name_check
 	cmp #0
 	beq @found
@@ -468,7 +573,7 @@ advance
 	bra ix
 
 nope	
-	lda #file_not_found
+	lda #fileNotFound
 	sec
 	rts
 
@@ -514,7 +619,7 @@ upper
 	bge @next
 	cmp #'a'
 	blt @next
-	and #$20
+	and #$ff xor $20
 	sta cat_str,y
 
 @next	iny
@@ -559,6 +664,10 @@ exit
 match	; a match!
 	; store the file type, aux type, eof, and extent pointers.
 ; a match!
+
+
+	with dp
+
 	lda buffer+HFSCatalogKey.keyLength,y
 	and #$ff
 	inc a ; doesn't include itself
@@ -573,13 +682,14 @@ match	; a match!
 	cmp #kHFSFileRecord
 	beq file
 	; folder thread, file thread.... invalid for us.
-	lda #file_not_found
+	lda #fileNotFound
 	sec
 	rts
 folder
 	with HFSCatalogFolder
 	stz eof
 	stz eof+2
+	stz blocks
 	stz at
 	lda #$f
 	sta ft
@@ -613,6 +723,15 @@ file
 	lda buffer+dataLogicalSize,y
 	xba
 	sta eof+2
+
+	; blocks
+	; update if variable block size?
+	lda buffer+dataPhysicalSize+2,y
+;	xba
+	lsr a ; >>9 since already xba
+	and #%01111111
+	sta blocks
+
 
 	lda #1
 	sta st ; storage type
@@ -658,16 +777,16 @@ file
 	stz at
 	lda data+userInfo+4,y
 	cmp #'dp'
-	bne @noft
+	bne noft
 	lda data+userInfo+4+2,y
 	cmp #'so'
-	bne @noft
+	bne noft
 pdos
 	lda data+userInfo,y
 	tax
 	and #$ff
 	cmp #'p'
-	bne @noft
+	bne noft
 	txa
 	xba
 	and #$ff
@@ -675,7 +794,7 @@ pdos
 	lda data+userInfo+2,y
 	xba
 	sta at
-@noft
+noft
 
 	lda #0
 	clc
@@ -685,6 +804,17 @@ pdos
 	endp
 
 
+	macro
+&lab	ifc_fail &str
+&lab	bcc @ok
+	pha
+	pea @str>>16
+	pea @str
+	_SysFailMgr
+	brk $ea
+@str	str.b &str
+@ok
+	mend
 
 ;
 ; everything below here will be clobbered.
@@ -707,8 +837,10 @@ startup proc
 	sty vector
 	sta unit
 
-	pea fakedp
-	pld
+	lda #0
+	tcd
+	ldx #$1ff
+	txs
 
 
 	with HFSMasterDirectoryBlock
@@ -754,15 +886,15 @@ startup proc
 	bpl @zloop
 
 	ldx #14-2
-@sloop
+sloop
 	lda sys,x
 	sta target_str_len,x
 	dex
 	dex
-	bpl @sloop
+	bpl sloop
 
 	jsr cat_lookup
-	bcs bad
+	ifc_fail 'Unable to locate System folder. Error=$'
 
 ; also check if dir?
 
@@ -776,15 +908,16 @@ startup proc
 ; lookup System:FSTs
 
 	ldx #14-2
-@floop
+floop
 	lda fsts,x
 	sta target_str_len,x
 	dex
 	dex
-	bpl @floop
+	bpl floop
 
 	jsr cat_lookup
-	bcs bad
+	ifc_fail 'Unable to locate System:FSTs folder. Error=$'
+
 ; also check if dir?
 
 	lda file_id
@@ -795,21 +928,22 @@ startup proc
 ; lookup System:Drivers
 
 	ldx #14-2
-@dloop
+dloop
 	lda drv,x
 	sta target_str_len,x
 	dex
 	dex
-	bpl @dloop
+	bpl dloop
 
 	jsr cat_lookup
-	bcs bad
+	ifc_fail 'Unable to locate System:Drivers folder. Error=$'
+
 ; also check if dir?
 
 	lda file_id
-	sta driver_id
+	sta drivers_id
 	lda file_id+2
-	sta driver_id+2
+	sta drivers_id+2
 
 
 ; lookup System:Start.GS.OS
@@ -822,19 +956,44 @@ startup proc
 	bpl @gloop
 
 	jsr cat_lookup
-	bcs bad
+	ifc_fail 'Unable to locate System:Start.GS.OS. Error=$'
 
+
+
+read
+	stz r0
+	lda blocks
+	beq bad
+
+	lda #$6800
+	sta pro.buffer
+
+@loop	lda r0
+	jsr read_file_block
+	bcs bad
+	lda pro.buffer
+;	clc
+	adc #512
+	sta pro.buffer
+	inc r0
+	dec blocks
+	bne @loop
 
 
 	lda at
 	sta auxtype
 
-;	lda #$1000 ; drivers:boot.driver support
-;	ldx #0
-;	ldy #0
 	jmp $6800
 
+bad	pha
+	pea @str>>16
+	pea @str
+	_SysFailMgr
+	brk $ea
+@str	str.b 'Error reading Start.GS.OS. Error=$'
 
+
+; buffered out to same length.
 sys	str.w 'SYSTEM'
 	dcb.b  6,0
 fsts	str.w 'FSTS'
@@ -844,10 +1003,5 @@ drv	str.w 'DRIVERS'
 gsos	str.w 'START.GS.OS'
 	dcb.b 1,0
 	endp
-
-
-
-fakedp	proc
-	end
 
 	end

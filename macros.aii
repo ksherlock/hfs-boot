@@ -76,3 +76,17 @@
 	ENDIF
 
 	MEND
+
+
+ MACRO
+&lab _BlockMove
+&lab ldx #$2B02
+     jsl $E10000
+ MEND
+
+  MACRO
+&lab _SysFailMgr
+&lab ldx #$1503
+     jsl $E10000
+ MEND
+ 
