@@ -4,10 +4,15 @@
 ;
 
 
+
 	include 'hfs.aii'
+	include 'macros.aii'
 
 	string asis
 	blanks on
+
+
+__smartport__	set 0
 
 buffer	equ $3000
 file_not_found  equ     $46
@@ -19,8 +24,10 @@ path	ds.l 1
 
 ; readfile
 eof	ds.l 1
-ft	ds.w 0
-at	ds.w 0
+ft	ds.w 1
+at	ds.w 1
+st	ds.w 1
+file_id	ds.l 1
 
 	endr
 
@@ -47,14 +54,25 @@ slot		ds.w 0
 unit		ds.w 0
 vector		ds.w 0
 
+block_offset	ds.w 0
+
 cat_extents	ds.w 6
 file_extents	ds.w 6
 
-cat_block	dc.w 0
+cat_root	dc.w 0
 
 system_id	dc.l 0
 fsts_id		dc.l 0
 driver_id	dc.l 0
+
+
+; ctree lookup
+target_parent	dc.l 0
+target_str_len	dc.w 0
+target_str	ds.b 32
+
+cat_str_len	dc.w 0
+cat_str		ds.b 32
 
 	endr
 
@@ -304,8 +322,368 @@ s1	dc.b 'xxSYSTEM:'
 s2	dc.b 'xxSYSTEM:DRIVERS:'
 s3	dc.b 'xxSYSTEM:FSTS:'
 
+	endp
+
+
+read_block proc
+	entry read_block_abs
+	entry vector
+
+	; input
+	; a = hfs block #
+	; will be adjusted for allocation block offset
+	;
+	with dp
+	clc
+	adc data.block_offset
+
+read_block_abs
+
+
+	; todo -- need to save/restore dp and stack
+
+	if __smartport__ then
+	sta sp.block
+	else
+	sta pro.block
+	endif
+
+	php
+	sec
+	xce
+	dc.b $20 ; jsr
+vector	dc.w $ffff
+	if __smartport__ then
+	dc.b sp.ReadBlock
+	dc.w sp
+	endif
+
+	bcs @fail
+	xce
+	plp
+	rts
+
+@fail	
+	clc
+	xce
+	plp
+	sec
+	rts
 
 	endp
+
+
+
+
+
+cat_lookup proc
+
+	; search for a file and a parent directory.
+
+	lda cat_root
+	sta bnum
+
+ix
+	ldx #-1
+	stx prev
+
+	lda bnum
+	jsr read_cat_block
+	bcc @ok
+	rts ; uhoh
+@ok
+	lda buffer+BTNodeDescriptor.numRecords
+	beq advance
+	sta count
+
+	ldx #512-2 ; last entry
+eloop
+	lda buffer,x ; entry offset
+	xba
+	tay
+	lda data+HFSCatalogKey.parentID,y
+	xba
+	cmp target_parent+2
+	beq @p2
+	blt lt
+	bge gt
+
+@p2	lda data+HFSCatalogKey.parentID+2,y
+	xba
+	cmp target_parent+2
+	beq @nm
+	blt lt
+	bge gt
+
+@gt
+	; if this is an index node,
+	; we overshot, so follow the tree via prev
+	; to the next level.
+	lda buffer+BTNodeDescriptor.kind-1
+	bmi nope ; index map
+	lda prev
+	bmi nope
+	sta bnum
+	bra ix
+
+; now do a name check....
+; target_name is UPPER CASE
+	jsr name_check
+	cmp #0
+	beq @found
+	bmi @lt
+	bra @gt
+
+
+@found
+	; a match! if this is an index node,
+	; descend....
+	lda buffer+BTNodeDescriptor.kind-1
+	bmi @leaf
+	lda data+38+2,y
+	xba
+	sta bnum
+	bra ix
+@leaf	jmp match
+
+
+
+
+; if this is an index node, keep it for later
+@lt	lda data+38+2,y
+	xba
+	sta prev
+
+@next
+	dex
+	dex
+	dec count
+	bne eloop
+
+advance
+	lda data+BTNodeDescriptor.fLink
+	beq nope
+	xba
+	sta bnum
+	bra ix
+
+nope	
+	lda #file_not_found
+	sec
+	rts
+
+
+name_check
+	; copy into catstr and upper case it.
+
+	phx
+	phy ; save
+
+
+;
+; we need to handle 0-length strings (folder threads)
+;
+
+
+	ldx #30
+@zloop	stz cat_str,x
+	dex
+	dex
+	bpl @zloop
+	stz cat_str_len
+	ldx #0
+	short m
+
+	lda data+HFSCatalogKey.nodeName,y
+	sta cat_str_len
+@loop
+	lda data+HFSCatalogKey.nodeName+1,y
+	sta cat_str,x
+	iny
+	inx
+	cpx cat_str_len
+	blt @loop
+
+upper
+	; now uppercase it
+	ldy #0
+	ldx cat_str_len
+	dex
+@loop	lda cat_str,y
+	cmp #'z'+1
+	bge @next
+	cmp #'a'
+	blt @next
+	and #$20
+	sta cat_str,y
+
+@next	iny
+	dex
+	bpl @loop
+
+
+cmp
+	ldx target_str_len
+	cpx cat_str_len
+	bge @ok
+	ldx cat_str_len
+@ok
+	dex
+	ldy #0
+@loop
+	lda target_str,y
+	cmp cat_str,y
+	beq @next
+	blt lt
+	bge gt
+
+@next
+	iny
+	bpl @loop
+
+	long m
+	lda #0
+	bra exit
+
+lt	long m
+	lda #-1
+	bra exit
+
+gt	long m
+	lda #1
+	
+exit	
+	ply
+	plx
+
+match	; a match!
+	; store the file type, aux type, eof, and extent pointers.
+; a match!
+	lda buffer+HFSCatalogKey.keyLength,y
+	and #$ff
+	inc a ; doesn't include itself
+	clc
+	adc buffer,x ; x still valid
+	tay
+
+	lda buffer+HFSCatalogFile.recordType
+	xba
+	cmp #kHFSFolderRecord
+	beq folder
+	cmp #kHFSFileRecord
+	beq file
+	; folder thread, file thread.... invalid for us.
+	lda #file_not_found
+	sec
+	rts
+folder
+	with HFSCatalogFolder
+	stz eof
+	stz eof+2
+	stz at
+	lda #$f
+	sta ft
+	lda #$0d
+	sta st ; storage type
+	ldx #12-2
+@eloop
+	stz file_extents,x
+	dex
+	dex
+	bpl @eloop
+
+
+	lda data+folderID+2,y
+	xba
+	sta file_id
+	lda data+folderID,y
+	xba
+	sta file_id+2
+
+	lda #0
+	clc
+	rts
+	endwith
+
+file
+	with HFSCatalogFile
+	lda buffer+dataLogicalSize+2,y
+	xba
+	sta eof
+	lda buffer+dataLogicalSize,y
+	xba
+	sta eof+2
+
+	lda #1
+	sta st ; storage type
+
+
+	lda buffer+dataExtents+0,y
+	xba
+	stz file_extents+0
+
+	lda buffer+dataExtents+2,y
+	xba
+	stz file_extents+2
+
+	lda buffer+dataExtents+4,y
+	xba
+	stz file_extents+4
+
+	lda buffer+dataExtents+6,y
+	xba
+	stz file_extents+6
+
+	lda buffer+dataExtents+8,y
+	xba
+	stz file_extents+8
+
+	lda buffer+dataExtents+10,y
+	xba
+	stz file_extents+10
+
+	lda data+fileID+2,y
+	xba
+	sta file_id
+	lda data+fileID,y
+	xba
+	sta file_id+2
+
+; file type aux type logic.
+; only support pdos encoding, nothing fancy.
+; 'p' filetype aux type pdos
+; where filetype = 80bit, aux type = 16 bit big endian
+
+	stz ft
+	stz at
+	lda data+userInfo+4,y
+	cmp #'dp'
+	bne @noft
+	lda data+userInfo+4+2,y
+	cmp #'so'
+	bne @noft
+pdos
+	lda data+userInfo,y
+	tax
+	and #$ff
+	cmp #'p'
+	bne @noft
+	txa
+	xba
+	and #$ff
+	sta ft
+	lda data+userInfo+2,y
+	xba
+	sta at
+@noft
+
+	lda #0
+	clc
+	rts
+	endwith
+
+	endp
+
 
 
 ;
@@ -321,7 +699,7 @@ startup proc
 ; read :system:start.gsos, load into memory @ $6800
 ; aux type is stored in auxtype
 
-	with dp
+	with dp, data
 
 ; assume 16-bit, etc.   
 
@@ -332,23 +710,141 @@ startup proc
 	pea fakedp
 	pld
 
-; ....
+
+	with HFSMasterDirectoryBlock
+	lda #2
+	jsr read_block_abs
+	; can't really fail...
+	lda buffer+drAlBlSt
+	xba
+	sta block_offset
+
+	ldx #3*HFSExtentDescriptor.sizeof-2
+@cloop	lda buffer+drCTExtRec,x
+	xba
+	sta cat_extents,x
+	dex
+	dex
+	bpl @cloop
+
+; save the volume name while we're at it?
+
+	endwith
+
+; find the root node.
+	lda cat_extents
+	jsr read_block
+
+	with BTHeaderRec
+	lda data+BTNodeDescriptor.sizeof+rootNode+2
+	xba
+	sta cat_root
+
+;
+; lookup SYSTEM
+;
+	lda #kHFSRootFolderID
+	sta target_parent
+	lda #kHFSRootFolderID>>16
+	stz target_parent+2
+	ldx #30
+@zloop	stz target_str,x
+	dex
+	dex
+	bpl @zloop
+
+	ldx #14-2
+@sloop
+	lda sys,x
+	sta target_str_len,x
+	dex
+	dex
+	bpl @sloop
+
+	jsr cat_lookup
+	bcs bad
+
+; also check if dir?
+
+	lda file_id
+	sta system_id
+	sta target_parent
+	lda file_id+2
+	sta system_id+2
+	sta target_parent+2
+
+; lookup System:FSTs
+
+	ldx #14-2
+@floop
+	lda fsts,x
+	sta target_str_len,x
+	dex
+	dex
+	bpl @floop
+
+	jsr cat_lookup
+	bcs bad
+; also check if dir?
+
+	lda file_id
+	sta fsts_id
+	lda file_id+2
+	sta fsts_id+2
+
+; lookup System:Drivers
+
+	ldx #14-2
+@dloop
+	lda drv,x
+	sta target_str_len,x
+	dex
+	dex
+	bpl @dloop
+
+	jsr cat_lookup
+	bcs bad
+; also check if dir?
+
+	lda file_id
+	sta driver_id
+	lda file_id+2
+	sta driver_id+2
+
+
+; lookup System:Start.GS.OS
+	ldx #14-2
+@gloop
+	lda gsos,x
+	sta target_str_len,x
+	dex
+	dex
+	bpl @gloop
+
+	jsr cat_lookup
+	bcs bad
+
+
 
 	lda at
 	sta auxtype
 
-	lda #$1000
-	ldx #0
-	ldy #0
-	jmp $6803
+;	lda #$1000 ; drivers:boot.driver support
+;	ldx #0
+;	ldy #0
+	jmp $6800
 
+
+sys	str.w 'SYSTEM'
+	dcb.b  6,0
+fsts	str.w 'FSTS'
+	dcb. 8,0
+drv	str.w 'DRIVERS'
+	dcb.b 5,0
+gsos	str.w 'START.GS.OS'
+	dcb.b 1,0
 	endp
 
-
-find_dir_ids
-
-	; search for SYSTEM, SYSTEM:DRIVERS and SYSTEM:FSTS folders
-	; and store their directory ids to simplify lookup later.
 
 
 fakedp	proc

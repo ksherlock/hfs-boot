@@ -1,0 +1,78 @@
+	MACRO
+	str.&size ; &arg, ...
+
+	lclc &str
+	lcla &i, &l
+
+&str	setc &setting('string')
+	STRING asis
+
+	if &size<>'' THEN
+	dc.&size @end-@start
+	ENDIF
+
+@start
+
+&i	seta 1
+&l	seta &nbr(&syslist)
+
+	WHILE &i<=&l DO
+	dc.b &syslist[&i]
+&i	seta &i+1
+	ENDWHILE
+
+@end
+
+	STRING &str
+
+	MEND
+
+
+	MACRO
+	long &p1,&p2
+
+	lcla &bits
+&bits	seta %00000000
+;&p1	setc &lc(&p1)
+;&p2	setc &lc(&p2)
+
+	if &p1='m' OR &p2='m' THEN
+&bits	seta &bits+%00100000
+	longa on
+	ENDIF
+
+	if &p1='x' OR &p2='x' THEN
+&bits	seta &bits+%00010000
+	longi on
+	ENDIF
+
+	IF &bits<>0 THEN
+	rep #&bits
+	ENDIF
+
+	MEND
+
+
+	MACRO
+	short &p1,&p2
+
+	lcla &bits
+&bits	seta %00000000
+;&p1	setc &lc(&p1)
+;&p2	setc &lc(&p2)
+
+	if &p1='m' OR &p2='m' THEN
+&bits	seta &bits+%00100000
+	longa off
+	ENDIF
+
+	if &p1='x' OR &p2='x' THEN
+&bits	seta &bits+%00010000
+	longi off
+	ENDIF
+
+	IF &bits<>0 THEN
+	sep #&bits
+	ENDIF
+
+	MEND
