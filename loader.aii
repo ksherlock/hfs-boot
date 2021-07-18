@@ -471,6 +471,70 @@ vector	dc.w $ffff
 	endp
 
 
+read_file_block proc
+; a = block #
+
+	with data,HFSExtentDescriptor
+
+@0
+	cmp file_extents+0+blockCount
+	bcs @1
+;	clc
+	adc file_extents+0+startBlock
+	bra read_block
+
+@1	sbc file_extents+0+blockCount
+	cmp file_extents+4+blockCount
+	bcs @2
+;	clc
+	adc file_extents+4+startBlock
+	bra read_block
+
+@2	sbc file_extents+4+blockCount
+	cmp file_extents+8+blockCount
+	bcs @3
+	adc file_extents+8+startBlock
+	bra read_block
+
+@3
+	lda #outOfRange ; too big
+	sec
+	rts
+
+	endp
+
+read_cat_block proc
+; a = block #
+
+	with data,HFSExtentDescriptor
+
+@0
+	cmp cat_extents+0+blockCount
+	bcs @1
+;	clc
+	adc cat_extents+0+startBlock
+	bra read_block
+
+@1	sbc cat_extents+0+blockCount
+	cmp cat_extents+4+blockCount
+	bcs @2
+;	clc
+	adc cat_extents+4+startBlock
+	bra read_block
+
+@2	sbc cat_extents+4+blockCount
+	cmp cat_extents+8+blockCount
+	bcs @3
+	adc cat_extents+8+startBlock
+	bra read_block
+
+@3
+	lda #outOfRange ; too big
+	sec
+	rts
+
+	endp
+
 
 
 
