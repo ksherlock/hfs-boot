@@ -194,16 +194,10 @@ ok
 	jsr read_extent_block
 
 	lda data+BTNodeDescriptor.numRecords ; # of records
-	xba
-;	asl a ; x 2
-;	sec
-;	sbc #512
-;	eor #-1
-;	inc a
-;	adc #-513 ; carry will be clear. +1 to avoid inc
-;	eor #-1
-	sta count
 	beq advance
+
+	xba
+	sta count
 
 again
 	ldx #512-2 ; last entry 
