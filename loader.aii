@@ -232,6 +232,10 @@ readfile proc
 	beq rdone
 	stz r0 ; block
 
+	lda #buffer
+	sta pro.buffer
+	; need to re-set cmd/slot as well?
+
 @rloop
 	lda r0
 	jsr read_file_block
@@ -301,6 +305,7 @@ prepare_path proc
 
 ; SYSTEM ?
 	ldx #3
+	ldy #2
 @loop
 	lda [path],y
 	cmp s1,y
@@ -377,9 +382,12 @@ f	; check for FSTs folder
 target
 ; now set target_str / len
 	lda [path]
+	inc a
+	inc a ; compensate for string length.
 	sec
 	sbc r0
 	beq fnf ; close enough
+	bmi fnf
 	sta target_str_len
 	cmp #16
 	bcs fnf
@@ -402,7 +410,7 @@ target
 	blt @next
 	and #$ff xor $20
 
-@next	sta target_str_len,x
+@next	sta target_str,x
 	iny
 	inx
 	cpx target_str_len
@@ -449,6 +457,14 @@ read_block_abs
 	sta pro.block
 	endif
 
+;
+; need to save/restore the stack.  start.gs.os will call w/ high stack
+;
+	tsc
+	sta _stack
+	lda #$01bf ; should be enough space
+	tcs
+
 	clc
 	php
 	sec
@@ -463,15 +479,24 @@ vector	dc.w $ffff
 	bcs @fail
 	xce
 	plp
+	lda _stack
+	tcs
+	lda #0
 	rts
 
 @fail	
 	clc
 	xce
 	plp
+	tax ; save
+	lda _stack
+	tcs	
 	sec
+	txa
 	and #$ff
 	rts
+
+_stack	ds.w 1
 
 	endp
 
@@ -831,27 +856,27 @@ file
 
 	lda buffer+dataExtents+0,y
 	xba
-	stz file_extents+0
+	sta file_extents+0
 
 	lda buffer+dataExtents+2,y
 	xba
-	stz file_extents+2
+	sta file_extents+2
 
 	lda buffer+dataExtents+4,y
 	xba
-	stz file_extents+4
+	sta file_extents+4
 
 	lda buffer+dataExtents+6,y
 	xba
-	stz file_extents+6
+	sta file_extents+6
 
 	lda buffer+dataExtents+8,y
 	xba
-	stz file_extents+8
+	sta file_extents+8
 
 	lda buffer+dataExtents+10,y
 	xba
-	stz file_extents+10
+	sta file_extents+10
 
 	lda buffer+fileID+2,y
 	xba
@@ -1084,6 +1109,10 @@ read
 	lda at
 	sta auxtype
 
+	lda #buffer
+	sta pro.buffer ; kind of important...
+
+	lda #0
 	jmp $6800
 
 bad	pha
