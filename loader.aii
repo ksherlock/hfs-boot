@@ -571,6 +571,7 @@ next_index
 @ok
 	lda buffer+BTNodeDescriptor.numRecords
 	beq advance
+	xba
 	sta count
 
 	ldx #512-2 ; last entry
@@ -660,6 +661,10 @@ name_check proc
 	; copy into catstr and upper case it.
 
 	; save x and y.
+	;
+	; a = 0 if match
+	; a = -1 if catalog entry < target
+	; a = +1 if catalog entry > target
 
 	with data
 
@@ -714,8 +719,8 @@ cmp
 @x
 	ldy #0
 @loop
-	lda target_str,y
-	cmp cat_str,y
+	lda cat_str,y
+	cmp target_str,y
 	beq @next
 	blt lt
 	bge gt
