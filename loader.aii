@@ -116,6 +116,7 @@ cat_str		dcb.b 32, 0
 
 getbootname proc
 	; getbootname(GSString *)
+	; return string needs a leading colon.
 
 	with dp
 
@@ -140,14 +141,18 @@ getbootname proc
 	with HFSMasterDirectoryBlock
 	lda buffer+drVN
 	and #$ff
+	inc a ; + 1 for :
 	sta [ptr]
-	inc a
+	inc a ; round up and divide
 	lsr a
 	tax ; count
 	dex
 
 	ldy #2
-@loop	lda buffer+drVN-1,y
+	lda #':'
+	sta [ptr],y
+	iny
+@loop	lda buffer+drVN-2,y
 	sta [ptr],y
 	iny
 	iny
