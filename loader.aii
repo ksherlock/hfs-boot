@@ -545,6 +545,8 @@ read_cat_block proc
 
 cat_lookup proc
 
+	import name_check, match
+
 	with data
 
 bnum	equ dp.r0
@@ -556,10 +558,12 @@ count	equ dp.r2
 	lda cat_root
 	sta bnum
 
-ix
+
+descend
 	ldx #-1
 	stx prev
 
+next_index
 	lda bnum
 	jsr read_cat_block
 	bcc @ok
@@ -592,12 +596,12 @@ eloop
 	; if this is an index node,
 	; we overshot, so follow the tree via prev
 	; to the next level.
-	lda buffer+BTNodeDescriptor.kind-1
-	bmi nope ; index map
 	lda prev
-	bmi nope
 	sta bnum
-	bra ix
+	; index map is 0xff so ora / bmi works.
+	ora buffer+BTNodeDescriptor.kind-1
+	bmi fnf ; index map
+	bra descend
 
 ; now do a name check....
 ; target_name is UPPER CASE
@@ -617,7 +621,7 @@ eloop
 	lda buffer+38+2,y
 	xba
 	sta bnum
-	bra ix
+	bra descend
 @leaf	jmp match
 
 
@@ -636,19 +640,28 @@ eloop
 
 advance
 	lda buffer+BTNodeDescriptor.fLink
-	beq nope
+	beq @last
 	xba
 	sta bnum
-	bra ix
+	bra next_index
+@last	; if there was a prev node, descend into it
+	lda prev
+	bmi fnf
+	sta bnum
+	bra descend
 
-nope	
+fnf
 	lda #fileNotFound
 	sec
 	rts
+	endp
 
-
-name_check
+name_check proc
 	; copy into catstr and upper case it.
+
+	; save x and y.
+
+	with data
 
 	phx
 	phy ; save
@@ -692,7 +705,7 @@ copy
 cmp
 	lda target_str_len
 	ora cat_str_len
-	beq match ; folder thread - no name.
+	beq eq ; folder thread - no name.
 
 	ldx target_str_len
 	cpx cat_str_len
@@ -712,7 +725,7 @@ cmp
 	dex
 	bne @loop
 
-	long m
+eq	long m
 	lda #0
 	bra exit
 
@@ -728,12 +741,13 @@ exit
 	plx
 	rts
 
-match	; a match!
-	; store the file type, aux type, eof, and extent pointers.
+	endp
+
+match	proc
 ; a match!
+; store the file type, aux type, eof, and extent pointers.
 
-
-	with dp
+	with dp, data
 
 	lda buffer+HFSCatalogKey.keyLength,y
 ;	and #$ff
@@ -749,7 +763,7 @@ match	; a match!
 	tay
 
 	lda buffer+HFSCatalogFile.recordType,y
-	xba
+	and #$ff
 	cmp #kHFSFolderRecord
 	beq folder
 	cmp #kHFSFileRecord
@@ -976,7 +990,7 @@ sloop
 	bpl sloop
 
 	jsr cat_lookup
-	ifc_fail 'Unable to locate System folder. Error=$'
+	ifc_fail 'Missing System folder. Error=$'
 
 ; also check if dir?
 
@@ -998,7 +1012,7 @@ floop
 	bpl floop
 
 	jsr cat_lookup
-	ifc_fail 'Unable to locate System:FSTs folder. Error=$'
+	ifc_fail 'Missing System:FSTs folder. Error=$'
 
 ; also check if dir?
 
@@ -1018,7 +1032,7 @@ dloop
 	bpl dloop
 
 	jsr cat_lookup
-	ifc_fail 'Unable to locate System:Drivers folder. Error=$'
+	ifc_fail 'Missing System:Drivers folder. Error=$'
 
 ; also check if dir?
 
@@ -1038,7 +1052,7 @@ dloop
 	bpl @gloop
 
 	jsr cat_lookup
-	ifc_fail 'Unable to locate System:Start.GS.OS. Error=$'
+	ifc_fail 'Missing System:Start.GS.OS. Error=$'
 
 
 
