@@ -2,6 +2,9 @@
 ;
 ; loader
 ;
+; currently limited to 512-byte blocks (64MB max filesystem)
+; need to use smartport protocol to use > 65535 blocks anyhow.
+;
 
 
 
@@ -29,7 +32,7 @@ r3	ds.w 1
 
 ; readfile
 eof	ds.l 1
-blocks	ds.w 1  ; shouldn't exceed...
+blocks	ds.w 1  ; shouldn't exceed $ffff blocks
 ft	ds.w 1
 at	ds.w 1
 st	ds.w 1
@@ -906,6 +909,13 @@ startup proc
 	ldx #$1ff
 	txs
 
+
+	lda #buffer
+	sta pro.buffer
+	short m
+	lda #1
+	sta pro.cmd
+	long m
 
 	with HFSMasterDirectoryBlock
 	lda #2
