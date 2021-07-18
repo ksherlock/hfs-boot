@@ -86,9 +86,9 @@ auxtype	dc.w 0
 
 data	record
 ; store catalog info
-slot		dc.w 0
-unit		dc.w 0
-vector		dc.w 0
+;slot		dc.w 0
+;unit		dc.w 0
+;vector		dc.w 0
 
 block_offset	dc.w 0
 
@@ -449,6 +449,7 @@ read_block_abs
 	sta pro.block
 	endif
 
+	clc
 	php
 	sec
 	xce
@@ -572,14 +573,14 @@ eloop
 	lda buffer,x ; entry offset
 	xba
 	tay
-	lda data+HFSCatalogKey.parentID,y
+	lda buffer+HFSCatalogKey.parentID,y
 	xba
 	cmp target_parent+2
 	beq @p2
 	blt @lt
 	bge @gt
 
-@p2	lda data+HFSCatalogKey.parentID+2,y
+@p2	lda buffer+HFSCatalogKey.parentID+2,y
 	xba
 	cmp target_parent
 	beq @nm
@@ -612,7 +613,7 @@ eloop
 	; descend....
 	lda buffer+BTNodeDescriptor.kind-1
 	bmi @leaf
-	lda data+38+2,y
+	lda buffer+38+2,y
 	xba
 	sta bnum
 	bra ix
@@ -622,7 +623,7 @@ eloop
 
 
 ; if this is an index node, keep it for later
-@lt	lda data+38+2,y
+@lt	lda buffer+38+2,y
 	xba
 	sta prev
 
@@ -633,7 +634,7 @@ eloop
 	bne eloop
 
 advance
-	lda data+BTNodeDescriptor.fLink
+	lda buffer+BTNodeDescriptor.fLink
 	beq nope
 	xba
 	sta bnum
@@ -666,10 +667,10 @@ name_check
 	ldx #0
 	short m
 
-	lda data+HFSCatalogKey.nodeName,y
+	lda buffer+HFSCatalogKey.nodeName,y
 	sta cat_str_len
 @loop
-	lda data+HFSCatalogKey.nodeName+1,y
+	lda buffer+HFSCatalogKey.nodeName+1,y
 	sta cat_str,x
 	iny
 	inx
@@ -770,10 +771,10 @@ folder
 	bpl @eloop
 
 
-	lda data+folderID+2,y
+	lda buffer+folderID+2,y
 	xba
 	sta file_id
-	lda data+folderID,y
+	lda buffer+folderID,y
 	xba
 	sta file_id+2
 
@@ -828,10 +829,10 @@ file
 	xba
 	stz file_extents+10
 
-	lda data+fileID+2,y
+	lda buffer+fileID+2,y
 	xba
 	sta file_id
-	lda data+fileID,y
+	lda buffer+fileID,y
 	xba
 	sta file_id+2
 
@@ -842,14 +843,14 @@ file
 
 	stz ft
 	stz at
-	lda data+userInfo+4,y
+	lda buffer+userInfo+4,y
 	cmp #'dp'
 	bne noft
-	lda data+userInfo+4+2,y
+	lda buffer+userInfo+4+2,y
 	cmp #'so'
 	bne noft
 pdos
-	lda data+userInfo,y
+	lda buffer+userInfo,y
 	tax
 	and #$ff
 	cmp #'p'
@@ -858,7 +859,7 @@ pdos
 	xba
 	and #$ff
 	sta ft
-	lda data+userInfo+2,y
+	lda buffer+userInfo+2,y
 	xba
 	sta at
 noft
@@ -900,9 +901,11 @@ startup proc
 
 ; assume 16-bit, etc.   
 
-	stx slot
+; unit still active from before, for now....
+
+;	stx slot
 	sty vector
-	sta unit
+;	sta unit
 
 	lda #0
 	tcd
@@ -942,7 +945,7 @@ startup proc
 	jsr read_block
 
 	with BTHeaderRec
-	lda data+BTNodeDescriptor.sizeof+rootNode+2
+	lda buffer+BTNodeDescriptor.sizeof+rootNode+2
 	xba
 	sta cat_root
 
