@@ -672,39 +672,33 @@ name_check
 	sta cat_str_len
 	beq cmp
 
-@loop
+; copy and upper case the string.
+copy
 	lda buffer+HFSCatalogKey.nodeName+1,y
+	cmp #'a'
+	blt @store
+	cmp #'z'+1
+	bge @store
+	and #$ff xor $20
+
+@store
 	sta cat_str,x
 	iny
 	inx
 	cpx cat_str_len
-	blt @loop
-
-
-upper
-	; now uppercase it
-	ldy #0
-	ldx cat_str_len
-@loop	lda cat_str,y
-	cmp #'z'+1
-	bge @next
-	cmp #'a'
-	blt @next
-	and #$ff xor $20
-	sta cat_str,y
-
-@next	iny
-	dex
-	bne @loop
+	blt copy
 
 
 cmp
+	lda target_str_len
+	ora cat_str_len
+	beq match ; folder thread - no name.
+
 	ldx target_str_len
 	cpx cat_str_len
-	bge @ok
+	bge @x
 	ldx cat_str_len
-@ok
-	dex
+@x
 	ldy #0
 @loop
 	lda target_str,y
@@ -715,7 +709,8 @@ cmp
 
 @next
 	iny
-	bpl @loop
+	dex
+	bne @loop
 
 	long m
 	lda #0
@@ -741,13 +736,19 @@ match	; a match!
 	with dp
 
 	lda buffer+HFSCatalogKey.keyLength,y
-	and #$ff
-	inc a ; doesn't include itself
+;	and #$ff
+	inc a ; length doesn't include itself
+	inc a ; pad to a word boundary.
+	and #$fe 
+	sta r0
+
+	lda buffer,x ; x still valid
+	xba
 	clc
-	adc buffer,x ; x still valid
+	adc r0
 	tay
 
-	lda buffer+HFSCatalogFile.recordType
+	lda buffer+HFSCatalogFile.recordType,y
 	xba
 	cmp #kHFSFolderRecord
 	beq folder
