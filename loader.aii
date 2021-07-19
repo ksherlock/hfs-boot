@@ -2,7 +2,7 @@
 ;
 ; loader
 ;
-; currently limited to 512-byte blocks (64MB max filesystem)
+; currently limited to 512-byte blocks (32MB max filesystem)
 ; need to use smartport protocol to use > 65535 blocks anyhow.
 ;
 

@@ -4,7 +4,7 @@
 ; '!' in the root directory of an HFS volume, load it, and execute it
 ; in full 16-bit mode, with a = prodos block call vector.
 ;
-; this currently only works with 512-byte blocks (max volume size = 64M)
+; this currently only works with 512-byte blocks (max volume size = 32M)
 ; but there's enough room to support variable block sizes.
 
 	include 'hfs.aii'
