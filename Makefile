@@ -2,12 +2,14 @@
 .PHONY: all
 all : bootblock loader
 
-bootblock : bootblock.omf | hfs.po
-	mpw makebiniigs -s -org 2048 bootblock.omf -o bootblock 
-	dd bs=512 if=bootblock of=hfs.po conv=notrunc oseek=0
+bootblock : bootblock.omf | hfs24.po
+	mpw makebiniigs -s -org 2048 bootblock.omf -o bootblock
+	dd bs=512 if=bootblock of=hfs24.po conv=notrunc oseek=0
 
-loader : loader.omf | hfs.po
-	mpw makebiniigs -s -org 8192 loader.omf -o loader 
+loader : loader.omf loader.rii | hfs24.po
+	mpw makebiniigs -s -org 8192 -t \$$bc loader.omf -o loader 
+	mpw reziigs loader.rii -o loader
+
 	sh cp-loader.sh
 
 # bootblock.omf : bootblock.obj

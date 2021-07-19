@@ -1,0 +1,12 @@
+#include "TypesIIgs.r"
+
+resource rComment (1) {
+	"GS/OS is booting on an HFS disk. This boot loader (and a boot block) enable it."
+};
+
+resource rVersion (1) {
+	{ 1, 0, 0, beta, 0 },
+	verUS,
+	"!",
+	"Kelvin Sherlock, Kansas Fest 2021"
+};
