@@ -1,6 +1,10 @@
 # hfs-boot
 GS/OS Boot block + loader for HFS
 
+See [releases](https://github.com/ksherlock/hfs-boot/releases) for a bootable disk image.
+
+
+
 Limitations:
 
 * Boot volume must use 512 byte allocation blocks (ie, max size is 32MB. This limit should be removed at some point)
