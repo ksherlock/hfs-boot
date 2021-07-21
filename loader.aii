@@ -16,7 +16,7 @@
 	blanks on
 
 
-__smartport__	set 0
+__smartport__	set 1
 
 buffer	equ $3000
 
@@ -41,17 +41,9 @@ file_id	ds.l 1
 	endr
 
 
-	if __smartport__ then
-sp	record $20
-ReadBlock	equ $01
-pcount	ds.b	1
-unit	ds.b	1
-buffer	ds.w	1
-block	ds.l	1 ; actually 24-bit
-	endr
 
-	else
 
+	if not __smartport__ then
 pro	record $42
 cmd	ds.b 1
 unit	ds.b 1
@@ -113,6 +105,16 @@ cat_str		dcb.b 32, 0
 
 	endr
 
+	if __smartport__ then
+sp	record
+ReadBlock	equ $01
+pcount	dc.b	3
+unit	dc.b	1
+buffer	dc.w	$3000 ; name conflict...
+block	dc.l	0 ; actually 24-bit
+	endr
+	endif
+
 
 getbootname proc
 	; getbootname(GSString *)
@@ -132,8 +134,10 @@ getbootname proc
 	plb
 
 ; get the volume name from the HFS MDB....
+	if not __smartport__ then
 	lda #buffer
 	sta pro.buffer
+	endif
 	lda #2
 	jsr read_block_abs
 	bcs exit	
@@ -237,8 +241,10 @@ readfile proc
 	beq rdone
 	stz r0 ; block
 
+	if not __smartport__ then
 	lda #buffer
 	sta pro.buffer
+	endif
 	; need to re-set cmd/slot as well?
 
 @rloop
@@ -974,12 +980,14 @@ startup proc
 	txs
 
 
+	if not __smartport__ then
 	lda #buffer
 	sta pro.buffer
 	short m
 	lda #1
 	sta pro.cmd
 	long m
+	endif
 
 	with HFSMasterDirectoryBlock
 	lda #2
@@ -1104,15 +1112,24 @@ read
 	beq bad
 
 	lda #$6800
+	if __smartport__ then
+	sta sp.buffer
+	else
 	sta pro.buffer
+	endif
 
 @loop	lda r0
 	jsr read_file_block
 	bcs bad
-	lda pro.buffer
 ;	clc
-	adc #512
+	lda #512
+	if __smartport__ then
+	adc sp.buffer
+	sta sp.buffer
+	else
+	adc pro.buffer
 	sta pro.buffer
+	endif
 	inc r0
 	dec blocks
 	bne @loop
@@ -1122,7 +1139,11 @@ read
 	sta auxtype
 
 	lda #buffer
+	if __smartport__ then
+	sta sp.buffer
+	else
 	sta pro.buffer ; kind of important...
+	endif
 
 	lda #0
 	jmp $6800

@@ -12,8 +12,7 @@
 	string asis
 	blanks on
 
-; smartport doesn't currently work ($28 no drive error because the unit isn't setup correctly?)
-__smartport__	set 0
+__smartport__	set 1
 
 zp	record 0
 slot	ds.w	1
@@ -26,16 +25,7 @@ extents		ds.b	3*HFSExtentDescriptor.sizeof
 
 	endr
 
-	if __smartport__ then
-sp	record $20
-ReadBlock	equ $01
-pcount	ds.b	1
-unit	ds.b	1
-buffer	ds.w	1
-block	ds.l	1 ; actually 24-bit
-	endr
-
-	else
+	if not __smartport__ then
 
 pro	record $42
 cmd	ds.b 1
@@ -63,9 +53,7 @@ boot	proc
 
 	dc.b $01 ; prodos boot id :D
 
-	if __smartport__ then
-	stx sp.unit
-	else
+	if not __smartport__ then
 	stx pro.unit
 	endif
 	txa
@@ -113,10 +101,7 @@ boot	proc
 noboot	brk $ea
 
 ok
-	if __smartport__ then
-	lda #3
-	sta sp.pcount
-	else
+	if not __smartport__ then
 	lda #1 ; prodos read block
 	sta pro.cmd
 	endif
@@ -131,13 +116,9 @@ ok
 	stz offset
 	stz bnum
 	stz count
-	lda #data
 
-	if __smartport__ then
-	sta sp.buffer
-;	stz sp.block ; will overwrite
-	stz sp.block+2
-	else
+	if not __smartport__ then
+	lda #data
 	sta pro.buffer
 	endif
 	lda #2
@@ -264,12 +245,13 @@ found
 	sta extents+2
 
 	; now load the blocks and
-	lda #$2000
-	if __smartport__ then
-	sta sp.buffer
-	else
-	sta pro.buffer
-	endif
+;	lda #$2000
+;	if __smartport__ then
+;	sta sp.buffer
+;	else
+;	sta pro.buffer
+;	endif
+
 	stz bnum
 @loop
 	lda bnum
@@ -278,8 +260,9 @@ found
 	lda #512
 	clc
 	if __smartport__ then
-	adc sp.buffer
-	sta sp.buffer
+	import sp_buffer
+	adc sp_buffer
+	sta sp_buffer
 	else
 	adc pro.buffer
 	sta pro.buffer
@@ -287,19 +270,33 @@ found
 	dec count
 	bne @loop
 
-	ldx slot
 	ldy vector
-	if __smartport__ then
-	lda sp.unit
-	else
+	if not __smartport__ then
+	ldx slot
 	lda pro.unit
-	endif
 	and #$00ff
+	endif
 
 	jmp $2000 ; kiss of life.
 
 
 	endp
+
+	if __smartport__ then
+sp	record 
+	entry sp_buffer, sp_block
+
+ReadBlock	equ $01
+pcount	dc.b	3
+unit	dc.b	1 ; hard-coded
+sp_buffer
+buffer	dc.w	$2000
+sp_block
+block	dc.l	1 ; actually 24-bit
+
+
+	endr
+	endif
 
 
 read_block proc
