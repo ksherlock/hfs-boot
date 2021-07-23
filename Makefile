@@ -15,7 +15,7 @@ loader : loader.omf loader.rii | hfs24.po
 # bootblock.omf : bootblock.obj
 # 	mpw linkiigs bootblock.obj -o bootblock.omf
 
-bootblock.obj : bootblock.aii hfs.aii
+bootblock.obj : bootblock.aii hfs.aii smartport.aii
 # 	mpw asmiigs bootblock.aii -o bootblock.obj
 
 loader.obj : loader.aii hfs.aii macros.aii

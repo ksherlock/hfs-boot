@@ -1,0 +1,87 @@
+
+
+Command 	record 0
+Status		equ $00
+ReadBlock	equ $01
+WriteBlock	equ $02
+Format		equ $03
+Control		equ $04
+Init		equ $05
+Open		equ $06 ; character device
+Close		equ $07 ; character device
+Read		equ $08
+Write		equ $09
+SetFormatOption	equ $0a
+GetFormatOption	equ $0b
+		endr
+
+Error		record 0
+badCommand	equ $01
+badPcount	equ $04
+busError	equ $06
+badUnit		equ $11
+noInterrupt	equ $1f
+badCode		equ $21
+badParameter	equ $22
+ioError		equ $27
+noDrive		equ $28
+noWrite		equ $2b
+badBlock	equ $2d
+diskSwitch	equ $2e
+offLine		equ $2f
+; $30-$3f = device specific
+; $40-$4f = reserved
+; $50-$5f = non fatal
+; $60-$6f = non fatal version of $20-$2f
+ioTerm		equ $69	
+		endr
+
+StatusDCB	record 0
+pCount		ds.b 1
+unit		ds.b 1
+statusList	ds.w 1
+statusCode	ds.b 1
+		endr
+
+IOBlockDCB	record 0
+pCount		ds.b 1
+unit		ds.b 1
+dataBuffer	ds.w 1
+blockNumber	ds.b 3 ; 24-bit
+		endr
+
+FormatDCB	record 0
+pCount		ds.b 1
+unit		ds.b 1
+		endr
+
+ControlDCB	record 0
+pCount		ds.b 1
+unit		ds.b 1
+controlList	ds.w 1
+controlCode	ds.b 1
+		endr
+
+InitDCB		record 0
+pCount		ds.b 1
+unit		ds.b 1
+		endr
+
+OpenDCB		record 0
+pCount		ds.b 1
+unit		ds.b 1
+		endr
+
+CloseDCB	record 0
+pCount		ds.b 1
+unit		ds.b 1
+		endr
+
+IODCB		record 0
+pCount		ds.b 1
+unit		ds.b 1
+dataBuffer	ds.w 1
+byteCount	ds.w 1
+address		ds.b 3 ; 24-bit
+		endr
+

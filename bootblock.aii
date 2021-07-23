@@ -9,30 +9,59 @@
 
 	include 'hfs.aii'
 
+
 	string asis
 	blanks on
 
 __smartport__	set 1
 
+	if __smartport__ then
+	include 'smartport.aii'
+	endif
+
+
+;
+; 32-bit version large volumes.
+ExtendedExtent		RECORD 0
+startBlock		ds.l	1	; offset: $0 (0)	;  first allocation block 
+blockCount		ds.l	1	; offset: $4 (8)	;  number of allocation blocks 
+sizeof			EQU *		; size:   $8 (8)
+			ENDR
+
+
+
 zp	record 0
 slot	ds.w	1
 ;vector	ds.w	1
 
-offset		ds.w	1
+startingBlock	ds.w	1
+
+blockMultiplier	ds.w	1
 bnum		ds.w	1
 count		ds.w	1
-extents		ds.b	3*HFSExtentDescriptor.sizeof
+
+extents		ds.b	3*ExtendedExtent.sizeof
+
+
+; multiplication stuff
+m1		ds.w	1
+m2		ds.l	1
+m3		ds.l	1
+
+	if * >= $42 then
+	aerror 'too much zero-page space'
+	endif
 
 	endr
 
 	if not __smartport__ then
 
-pro	record $42
-cmd	ds.b 1
-unit	ds.b 1
-buffer	ds.b 2
-block	ds.b 2
-	endr
+pro		record $42
+cmd		ds.b 1
+unit		ds.b 1
+dataBuffer	ds.b 2
+blockNumber	ds.b 2
+		endr
 
 	endif
 
@@ -43,6 +72,7 @@ data	record $2000
 
 	entry read_block, read_block_abs, read_extent_block
 	entry vector
+	entry extent_to_extent
 
 boot	proc
 	longi off
@@ -56,6 +86,7 @@ boot	proc
 	if not __smartport__ then
 	stx pro.unit
 	endif
+
 	txa
 	lsr a
 	lsr a
@@ -113,13 +144,14 @@ ok
 	longa on
 
 
-	stz offset
+;	stz startingBlock
+;	stz drAlBlkSiz
 	stz bnum
 	stz count
 
 	if not __smartport__ then
 	lda #data
-	sta pro.buffer
+	sta pro.dataBuffer
 	endif
 	lda #2
 	jsr read_block_abs
@@ -129,6 +161,9 @@ ok
 ;
 ; wait a minute... max 65535 blocks, therefore high word of allocation block, etc, always 0.
 ; i assume hfs use 32-bit links in the btree for in-memory use (24-bit or 32 pointers)
+;
+; actually, offset could be 32-bit due to large allocation blocks. however, that's unreasonably large for the
+; catalog file or boot loader file.
 
 ;
 ; search for a file named ! in the root directory.
@@ -138,22 +173,39 @@ ok
 	with HFSMasterDirectoryBlock
 	lda data+drAlBlSt
 	xba
-	sta offset
-
-	ldx #3*HFSExtentDescriptor.sizeof-2
-@cloop	lda data+drCTExtRec,x
+	sta startingBlock
+; drAlBlkSiz is actually a 32-bit number.
+;
+;	lda data+drAlBlkSiz+2
+;	xba
+;	sta drAlBlkSiz
+;	xba
+	lda data+drAlBlkSiz+1
 	xba
-	sta extents,x
-	dex
-	dex
-	bpl @cloop
+	lsr a ; / 2
+	sta blockMultiplier ; 0 = 512 byte blocks, 1 = 
+
+
+;	ldx #3*HFSExtentDescriptor.sizeof-2
+;@cloop	lda data+drCTExtRec,x
+;	xba
+;	sta extents,x
+;	dex
+;	dex
+;	bpl @cloop
+
+	ldy #drCTExtRec ; offset
+	jsr extent_to_extent
+
+
 	endwith
 
-;	lda offset
+;	lda drAlBlSt
 ;	clc
 ;	adc extents
-	lda extents
-	jsr read_block
+	lda #0
+	ldx #0
+	jsr read_extent_block
 
 	;
 	; block should be a btree header block. find the first leaf node.
@@ -170,8 +222,6 @@ ok
 	;
 	; assert leaf < # allocated lbocks?
 	;
-	;lda leaf
-	; s/b leaf + cat extent + offset; todo - this offset is in terms of the catalog extent
 	jsr read_extent_block
 
 	lda data+BTNodeDescriptor.numRecords ; # of records
@@ -237,35 +287,43 @@ found
 	sta count
 
 	; todo -- all extents...
-	lda data+8+dataExtents,y
-	xba
-	sta extents
-	lda data+8+dataExtents+2,y
-	xba
-	sta extents+2
+;	lda data+8+dataExtents,y
+;	xba
+;	sta extents
+;	lda data+8+dataExtents+2,y
+;	xba
+;	sta extents+2
+
+	tya
+	clc
+	adc #8+dataExtents
+	tay
+	jsr extent_to_extent
+
 
 	; now load the blocks and
 ;	lda #$2000
 ;	if __smartport__ then
-;	sta sp.buffer
+;	sta sp.dataBuffer
 ;	else
-;	sta pro.buffer
+;	sta pro.dataBuffer
 ;	endif
 
 	stz bnum
 @loop
 	lda bnum
+	ldx #0
 	jsr read_extent_block
 	inc bnum
 	lda #512
 	clc
 	if __smartport__ then
-	import sp_buffer
-	adc sp_buffer
-	sta sp_buffer
+	import sp:IOBlockDCB
+	adc sp.dataBuffer
+	sta sp.dataBuffer
 	else
-	adc pro.buffer
-	sta pro.buffer
+	adc pro.dataBuffer
+	sta pro.dataBuffer
 	endif
 	dec count
 	bne @loop
@@ -284,16 +342,11 @@ found
 
 	if __smartport__ then
 sp	record 
-	entry sp_buffer, sp_block
 
-ReadBlock	equ $01
-pcount	dc.b	3
-unit	dc.b	1 ; hard-coded
-sp_buffer
-buffer	dc.w	$2000
-sp_block
-block	dc.l	1 ; actually 24-bit
-
+pCount		dc.b	3
+unit		dc.b	1 ; hard-coded
+dataBuffer	dc.w	$2000
+blockNumber	dc.l	1 ; actually 24-bit
 
 	endr
 	endif
@@ -309,17 +362,14 @@ read_block proc
 	;
 	with zp
 	clc
-	adc offset
+	adc startingBlock
 
 read_block_abs
-;
-; based on testing, this drops into emulation mode, so do it and recover.
-;
 
 	if __smartport__ then
-	sta sp.block
+	sta sp.blockNumber
 	else
-	sta pro.block
+	sta pro.blockNumber
 	endif
 
 	php
@@ -328,7 +378,7 @@ read_block_abs
 	dc.b $20 ; jsr
 vector	dc.w $ffff
 	if __smartport__ then
-	dc.b sp.ReadBlock
+	dc.b Command.ReadBlock
 	dc.w sp
 	endif
 
@@ -344,30 +394,118 @@ read_extent_block proc
 
 ; This doesn't check beyond the 3rd extent
 
-	with zp,HFSExtentDescriptor
+	with zp,ExtendedExtent
+
+; TODO - not yet 32-bit clean.
 
 @0
-	cmp extents+0+blockCount
+	cmp extents+(sizeof*0)+blockCount
 	bcs @1
 ;	clc
-	adc extents+0+startBlock
+	adc extents+(sizeof*0)+startBlock
 	bra read_block
 
-@1	sbc extents+0+blockCount
-	cmp extents+4+blockCount
+@1	sbc extents+(sizeof*0)+blockCount
+	cmp extents+(sizeof*1)+blockCount
 	bcs @2
 ;	clc
-	adc extents+4+startBlock
+	adc extents+(sizeof*1)+startBlock
 	bra read_block
 
-@2	sbc extents+4+blockCount
-	cmp extents+8+blockCount
+@2	sbc extents+(sizeof*1)+blockCount
+	cmp extents+(sizeof*2)+blockCount
 	bcs @3
-	adc extents+8+startBlock
+	adc extents+(sizeof*2)+startBlock
 	bra read_block
 
 @3	brk $ea
 	endp
+
+
+multiply proc
+; inputs: m1 (16-bit), m2 (32-bit)
+; outputs: m3 (32-bit)
+; m1, m2 clobbered
+	with zp
+
+	stz m3
+	stz m3+2
+	lda m1
+	beq rts
+	lda m2
+	ora m3
+	beq rts
+
+loop
+	lsr m1
+	bcc next
+
+add	clc
+	lda m2
+	adc m3
+	sta m3
+	lda m2+2
+	adc m3+2
+	sta m3+2
+
+next	asl m2
+	rol m2+2
+	lda m1
+	bne loop	
+
+rts	rts
+	endp
+
+extent_to_extent proc
+	; y = offset into data.
+	; clobbers x, y
+	with zp
+	import multiply
+
+	ldx #0
+loop1
+	lda data,y
+	xba
+	sta extents,x
+	stz extents+2,x
+	iny
+	iny
+	inx
+	inx
+	inx
+	inx
+	cpx #3*4*2
+	blt loop1
+
+; now multiply...
+	lda blockMultiplier
+	dec a
+	beq rts
+
+	ldx #3*4*2-4
+loop2
+	lda blockMultiplier
+	sta m1
+	lda extents+0,x
+	sta m2
+	stz m2+2
+	jsr multiply
+	lda m3
+	sta extents+0,x
+	lda m3+2
+	sta extents+2,x
+
+	dex
+	dex
+	dex
+	dex
+	bpl loop2
+
+
+rts	rts
+	endp
+
+
 
 
 
