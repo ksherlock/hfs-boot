@@ -18,6 +18,11 @@
 
 __smartport__	set 1
 
+
+	if __smartport__ then
+	include 'smartport.aii'
+	endif
+
 buffer	equ $3000
 
 dp	record 0
@@ -44,12 +49,12 @@ file_id	ds.l 1
 
 
 	if not __smartport__ then
-pro	record $42
-cmd	ds.b 1
-unit	ds.b 1
-buffer	ds.b 2
-block	ds.b 2
-	endr
+pro		record $42
+cmd		ds.b 1
+unit		ds.b 1
+dataBuffer	ds.b 2
+blockNumber	ds.b 2
+		endr
 
 	endif
 
@@ -106,13 +111,12 @@ cat_str		dcb.b 32, 0
 	endr
 
 	if __smartport__ then
-sp	record
-ReadBlock	equ $01
-pcount	dc.b	3
-unit	dc.b	1
-buffer	dc.w	$3000 ; name conflict...
-block	dc.l	0 ; actually 24-bit
-	endr
+sp		record
+pCount		dc.b	3
+unit		dc.b	1
+dataBuffer	dc.w	$3000 ; name conflict...
+blockNumber	dc.l	0 ; actually 24-bit
+		endr
 	endif
 
 
@@ -136,7 +140,7 @@ getbootname proc
 ; get the volume name from the HFS MDB....
 	if not __smartport__ then
 	lda #buffer
-	sta pro.buffer
+	sta pro.dataBuffer
 	endif
 	lda #2
 	jsr read_block_abs
@@ -243,7 +247,7 @@ readfile proc
 
 	if not __smartport__ then
 	lda #buffer
-	sta pro.buffer
+	sta pro.dataBuffer
 	endif
 	; need to re-set cmd/slot as well?
 
@@ -982,7 +986,7 @@ startup proc
 
 	if not __smartport__ then
 	lda #buffer
-	sta pro.buffer
+	sta pro.dataBuffer
 	short m
 	lda #1
 	sta pro.cmd
@@ -1113,9 +1117,9 @@ read
 
 	lda #$6800
 	if __smartport__ then
-	sta sp.buffer
+	sta sp.dataBuffer
 	else
-	sta pro.buffer
+	sta pro.dataBuffer
 	endif
 
 @loop	lda r0
@@ -1124,11 +1128,11 @@ read
 ;	clc
 	lda #512
 	if __smartport__ then
-	adc sp.buffer
-	sta sp.buffer
+	adc sp.dataBuffer
+	sta sp.dataBuffer
 	else
-	adc pro.buffer
-	sta pro.buffer
+	adc pro.dataBuffer
+	sta pro.dataBuffer
 	endif
 	inc r0
 	dec blocks
@@ -1140,9 +1144,9 @@ read
 
 	lda #buffer
 	if __smartport__ then
-	sta sp.buffer
+	sta sp.dataBuffer
 	else
-	sta pro.buffer ; kind of important...
+	sta pro.dataBuffer ; kind of important...
 	endif
 
 	lda #0
