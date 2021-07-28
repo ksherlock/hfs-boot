@@ -449,73 +449,6 @@ s3	dc.b 'xxSYSTEM:FSTS:'
 	endp
 
 
-read_block proc
-	entry read_block_abs
-	entry vector
-
-	; input
-	; a = hfs block #
-	; will be adjusted for allocation block offset
-	;
-	with dp
-	clc
-	adc data.block_offset
-
-read_block_abs
-
-
-	; todo -- need to save/restore dp and stack
-
-	if __smartport__ then
-	sta sp.block
-	else
-	sta pro.block
-	endif
-
-;
-; need to save/restore the stack.  start.gs.os will call w/ high stack
-;
-	tsc
-	sta _stack
-	lda #$01bf ; should be enough space
-	tcs
-
-	clc
-	php
-	sec
-	xce
-	dc.b $20 ; jsr
-vector	dc.w $ffff
-	if __smartport__ then
-	dc.b sp.ReadBlock
-	dc.w sp
-	endif
-
-	bcs @fail
-	xce
-	plp
-	lda _stack
-	tcs
-	lda #0
-	rts
-
-@fail	
-	clc
-	xce
-	plp
-	tax ; save
-	lda _stack
-	tcs	
-	sec
-	txa
-	and #$ff
-	rts
-
-_stack	ds.w 1
-
-	endp
-
-
 read_file_block proc
 ; a = block #
 
@@ -577,6 +510,73 @@ read_cat_block proc
 	lda #outOfRange ; too big
 	sec
 	rts
+
+	endp
+
+
+
+
+read_block proc
+	entry read_block_abs
+	entry vector
+
+	; input
+	; a = hfs block #
+	; will be adjusted for allocation block offset
+	;
+	with dp
+	clc
+	adc data.block_offset
+
+read_block_abs
+
+
+	if __smartport__ then
+	sta sp.blockNumber
+	else
+	sta pro.blockNumber
+	endif
+
+;
+; need to save/restore the stack.  start.gs.os will call w/ high stack
+;
+	tsc
+	sta _stack
+	lda #$01bf ; should be enough space
+	tcs
+
+	clc
+	php
+	sec
+	xce
+	dc.b $20 ; jsr
+vector	dc.w $ffff
+	if __smartport__ then
+	dc.b Command.ReadBlock
+	dc.w sp
+	endif
+
+	bcs @fail
+	xce
+	plp
+	lda _stack
+	tcs
+	lda #0
+	rts
+
+@fail	
+	clc
+	xce
+	plp
+	tax ; save
+	lda _stack
+	tcs	
+	sec
+	txa
+	and #$ff
+	rts
+
+_stack	ds.w 1
 
 	endp
 
