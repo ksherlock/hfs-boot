@@ -120,6 +120,8 @@ blockNumber	dc.l	0 ; actually 24-bit
 	endif
 
 
+_stack	ds.w 1
+
 getbootname proc
 	; getbootname(GSString *)
 	; return string needs a leading colon.
@@ -137,6 +139,13 @@ getbootname proc
 	phk
 	plb
 
+	; prepare the stack for emulation mode
+	tsx
+	stx _stack
+	ldx #$01ff ; should be enough space
+	txs
+
+
 ; get the volume name from the HFS MDB....
 	if not __smartport__ then
 	lda #buffer
@@ -144,6 +153,11 @@ getbootname proc
 	endif
 	lda #2
 	jsr read_block_abs
+
+	; restore the stack. does not affect a/carry
+	ldx _stack
+	txs
+
 	bcs exit	
 
 	with HFSMasterDirectoryBlock
@@ -232,12 +246,21 @@ readfile proc
 	phk
 	plb
 
+	; prepare the stack for emulation mode
+	tsx
+	stx _stack
+	ldx #$01ff ; should be enough space
+	txs
+
 
 	jsr prepare_path
 	bcs exit
 
 	jsr cat_lookup
 	bcs exit
+
+
+
 
 	; now read file, one block at a time,
 	; and copy to ptr.
@@ -284,6 +307,9 @@ rdone
 
 ; ...
 
+	ldx _stack
+	txs
+
 	; stack: b, rts,
 	lda ft
 	sta 4,s
@@ -296,7 +322,12 @@ rdone
 
 	lda #0
 	clc
+	plb
+	rts
+
 exit
+	ldx _stack
+	txs
 	plb
 	rts
 
@@ -537,15 +568,6 @@ read_block_abs
 	sta pro.blockNumber
 	endif
 
-;
-; need to save/restore the stack.  start.gs.os will call w/ high stack
-;
-	tsc
-	sta _stack
-	lda #$01bf ; should be enough space
-	tcs
-
-	clc
 	php
 	sec
 	xce
@@ -559,21 +581,16 @@ vector	dc.w $ffff
 	bcs @fail
 	xce
 	plp
-	lda _stack
-	tcs
 	lda #0
+	clc
 	rts
 
 @fail	
 	clc
 	xce
 	plp
-	tax ; save
-	lda _stack
-	tcs	
-	sec
-	txa
 	and #$ff
+	sec
 	rts
 
 _stack	ds.w 1
