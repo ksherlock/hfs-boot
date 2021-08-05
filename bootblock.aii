@@ -65,9 +65,7 @@ blockNumber	ds.b 2
 
 	endif
 
-data	record $2000
-	ds.b	512
-	endr
+buffer	equ $2000
 
 
 	entry read_block, read_block_abs, read_extent_block
@@ -150,7 +148,7 @@ ok
 	stz count
 
 	if not __smartport__ then
-	lda #data
+	lda #buffer
 	sta pro.dataBuffer
 	endif
 	lda #2
@@ -171,23 +169,23 @@ ok
 ;
 ;
 	with HFSMasterDirectoryBlock
-	lda data+drAlBlSt
+	lda buffer+drAlBlSt
 	xba
 	sta startingBlock
 ; drAlBlkSiz is actually a 32-bit number.
 ;
-;	lda data+drAlBlkSiz+2
+;	lda buffer+drAlBlkSiz+2
 ;	xba
 ;	sta drAlBlkSiz
 ;	xba
-	lda data+drAlBlkSiz+1
+	lda buffer+drAlBlkSiz+1
 	xba
 	lsr a ; / 2
 	sta blockMultiplier ; 0 = 512 byte blocks, 1 = 
 
 
 ;	ldx #3*HFSExtentDescriptor.sizeof-2
-;@cloop	lda data+drCTExtRec,x
+;@cloop	lda buffer+drCTExtRec,x
 ;	xba
 ;	sta extents,x
 ;	dex
@@ -211,10 +209,10 @@ ok
 	; block should be a btree header block. find the first leaf node.
 	;
 	with BTHeaderRec
-;	lda data+BTNodeDescriptor.sizeof+firstLeafNode
+;	lda buffer+BTNodeDescriptor.sizeof+firstLeafNode
 ;	xba
 ;	sta leaf+2
-	lda data+BTNodeDescriptor.sizeof+firstLeafNode+2
+	lda buffer+BTNodeDescriptor.sizeof+firstLeafNode+2
 	xba
 ;	sta bnum
 
@@ -224,7 +222,7 @@ ok
 	;
 	jsr read_extent_block
 
-	lda data+BTNodeDescriptor.numRecords ; # of records
+	lda buffer+BTNodeDescriptor.numRecords ; # of records
 	beq advance
 
 	xba
@@ -233,19 +231,19 @@ ok
 again
 	ldx #512-2 ; last entry 
 @loop
-	lda data,x ; entry offset
+	lda buffer,x ; entry offset
 	xba
 	tay
-	lda data+HFSCatalogKey.parentID,y ; parent id
+	lda buffer+HFSCatalogKey.parentID,y ; parent id
 	bne notfound
-	lda data+HFSCatalogKey.parentID+2,y
+	lda buffer+HFSCatalogKey.parentID+2,y
 	xba
 	cmp #2
 	blt @next
 	beq @name
 	bge notfound
 @name	; name is a p-string.
-	lda data+HFSCatalogKey.nodeName,y
+	lda buffer+HFSCatalogKey.nodeName,y
 	cmp #$2101 ; pstr !
 	beq found
 	bge notfound
@@ -255,7 +253,7 @@ again
 	dec count
 	bne @loop
 advance ; next block!
-	lda data+BTNodeDescriptor.fLink+2
+	lda buffer+BTNodeDescriptor.fLink+2
 	beq notfound
 	xba
 	jsr read_extent_block
@@ -274,12 +272,12 @@ found
 
 	; assume < 65535 bytes :)
 	with HFSCatalogFile
-	lda data+8+recordType,y
+	lda buffer+8+recordType,y
 	and #$00ff
 	cmp #kHFSFileRecord
 	bne notfound
 
-	lda data+8+dataPhysicalSize+2,y
+	lda buffer+8+dataPhysicalSize+2,y
 ;	xba
 	lsr a ; >>9 since already xba
 	and #%01111111
@@ -287,10 +285,10 @@ found
 	sta count
 
 	; todo -- all extents...
-;	lda data+8+dataExtents,y
+;	lda buffer+8+dataExtents,y
 ;	xba
 ;	sta extents
-;	lda data+8+dataExtents+2,y
+;	lda buffer+8+dataExtents+2,y
 ;	xba
 ;	sta extents+2
 
@@ -457,14 +455,14 @@ rts	rts
 	endp
 
 extent_to_extent proc
-	; y = offset into data.
+	; y = offset into buffer.
 	; clobbers x, y
 	with zp
 	import multiply
 
 	ldx #0
 loop1
-	lda data,y
+	lda buffer,y
 	xba
 	sta extents,x
 	stz extents+2,x

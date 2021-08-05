@@ -23,9 +23,19 @@ __smartport__	set 1
 	include 'smartport.aii'
 	endif
 
+;
+; 32-bit version large volumes.
+ExtendedExtent		RECORD 0
+startBlock		ds.l	1	; offset: $0 (0)	;  first allocation block 
+blockCount		ds.l	1	; offset: $4 (8)	;  number of allocation blocks 
+sizeof			EQU *		; size:   $8 (8)
+			ENDR
+
+
+
 buffer	equ $3000
 
-dp	record 0
+zp	record 0
 ptr	ds.l 1
 path	ds.l 1
 
@@ -42,6 +52,22 @@ ft	ds.w 1
 at	ds.w 1
 st	ds.w 1
 file_id	ds.l 1
+
+
+
+extents		ds.b	3*ExtendedExtent.sizeof
+
+; multiplication stuff
+m1		ds.w	1
+m2		ds.l	1
+m3		ds.l	1
+
+
+
+; too much zp space...
+	if not __smartport__ and * >= $42 then
+	aerror 'too much zero-page space'
+	endif
 
 	endr
 
@@ -62,6 +88,7 @@ blockNumber	ds.b 2
 	entry read_block, read_block_abs
 	entry prepare_path, cat_lookup
 	entry read_cat_block, read_file_block
+	entry extent_to_extent
 
 
 header	proc
@@ -87,10 +114,12 @@ data	record
 ;unit		dc.w 0
 ;vector		dc.w 0
 
-block_offset	dc.w 0
+startingBlock	dc.w 0
+blockMultiplier	dc.w 0
 
-cat_extents	dcb.w 6, 0
-file_extents	dcb.w 6, 0
+
+cat_extents	ds.b 3*ExtendedExtent.sizeof
+file_extents	ds.b 3*ExtendedExtent.sizeof
 
 cat_root	dc.w 0
 
@@ -126,7 +155,7 @@ getbootname proc
 	; getbootname(GSString *)
 	; return string needs a leading colon.
 
-	with dp
+	with zp
 
 	plx ; rts
 	ply
@@ -194,7 +223,7 @@ exit
 getfstname proc
 	; getfstname(GSString *)
 
-	with dp
+	with zp
 
 	plx ; rts
 	ply
@@ -229,7 +258,7 @@ name	str.w 'hfs.fst'
 
 readfile proc
 ; (eof, aux type, file type) readfile(GSString *, void *)
-	with dp
+	with zp
 
 	plx ; rts
 	ply
@@ -335,7 +364,7 @@ exit
 
 prepare_path proc
 	
-	with dp, data
+	with zp, data
 
 ; optimism
 	stz r0 ; offset into path
@@ -483,26 +512,26 @@ s3	dc.b 'xxSYSTEM:FSTS:'
 read_file_block proc
 ; a = block #
 
-	with data,HFSExtentDescriptor
+	with data,ExtendedExtent
 
 @0
-	cmp file_extents+0+blockCount
+	cmp file_extents+(sizeof*0)+blockCount
 	bcs @1
 ;	clc
-	adc file_extents+0+startBlock
+	adc file_extents+(sizeof*0)+startBlock
 	bra read_block
 
-@1	sbc file_extents+0+blockCount
-	cmp file_extents+4+blockCount
+@1	sbc file_extents+(sizeof*0)+blockCount
+	cmp file_extents+(sizeof*1)+blockCount
 	bcs @2
 ;	clc
-	adc file_extents+4+startBlock
+	adc file_extents+(sizeof*1)+startBlock
 	bra read_block
 
-@2	sbc file_extents+4+blockCount
-	cmp file_extents+8+blockCount
+@2	sbc file_extents+(sizeof*1)+blockCount
+	cmp file_extents+(sizeof*2)+blockCount
 	bcs @3
-	adc file_extents+8+startBlock
+	adc file_extents+(sizeof*2)+startBlock
 	bra read_block
 
 @3
@@ -515,26 +544,28 @@ read_file_block proc
 read_cat_block proc
 ; a = block #
 
-	with data,HFSExtentDescriptor
+; TODO - not 32-bit clean yet.
+
+	with data,ExtendedExtent
 
 @0
-	cmp cat_extents+0+blockCount
+	cmp cat_extents+(sizeof*0)+blockCount
 	bcs @1
 ;	clc
-	adc cat_extents+0+startBlock
+	adc cat_extents+(sizeof*0)+startBlock
 	bra read_block
 
-@1	sbc cat_extents+0+blockCount
-	cmp cat_extents+4+blockCount
+@1	sbc cat_extents+(sizeof*0)+blockCount
+	cmp cat_extents+(sizeof*1)+blockCount
 	bcs @2
 ;	clc
-	adc cat_extents+4+startBlock
+	adc cat_extents+(sizeof*1)+startBlock
 	bra read_block
 
-@2	sbc cat_extents+4+blockCount
-	cmp cat_extents+8+blockCount
+@2	sbc cat_extents+(sizeof*1)+blockCount
+	cmp cat_extents+(sizeof*2)+blockCount
 	bcs @3
-	adc cat_extents+8+startBlock
+	adc cat_extents+(sizeof*2)+startBlock
 	bra read_block
 
 @3
@@ -555,9 +586,8 @@ read_block proc
 	; a = hfs block #
 	; will be adjusted for allocation block offset
 	;
-	with dp
 	clc
-	adc data.block_offset
+	adc data.startingBlock
 
 read_block_abs
 
@@ -606,9 +636,9 @@ cat_lookup proc
 
 	with data
 
-bnum	equ dp.r0
-prev	equ dp.r1
-count	equ dp.r2
+bnum	equ zp.r0
+prev	equ zp.r1
+count	equ zp.r2
 
 	; search for a file and a parent directory.
 
@@ -816,7 +846,7 @@ match	proc
 ; a match!
 ; store the file type, aux type, eof, and extent pointers.
 
-	with dp, data
+	with zp, data
 
 	lda buffer+HFSCatalogKey.keyLength,y
 ;	and #$ff
@@ -851,7 +881,7 @@ folder
 	sta ft
 	lda #$0d
 	sta st ; storage type
-	ldx #12-2
+	ldx #3*ExtendedExtent.sizeof-2
 @eloop
 	stz file_extents,x
 	dex
@@ -892,30 +922,19 @@ file
 	lda #1
 	sta st ; storage type
 
-
-	lda buffer+dataExtents+0,y
-	xba
-	sta file_extents+0
-
-	lda buffer+dataExtents+2,y
-	xba
-	sta file_extents+2
-
-	lda buffer+dataExtents+4,y
-	xba
-	sta file_extents+4
-
-	lda buffer+dataExtents+6,y
-	xba
-	sta file_extents+6
-
-	lda buffer+dataExtents+8,y
-	xba
-	sta file_extents+8
-
-	lda buffer+dataExtents+10,y
-	xba
-	sta file_extents+10
+	phy ; save
+	tya
+	clc
+	adc #dataExtents
+	tay
+;	ldy #dataExtents
+	jsr extent_to_extent
+	lda #3*ExtendedExtent.sizeof-1
+	ldx #extents
+	ldy #file_extents
+	mvn $00,$00
+	; a, x, y clobbered.
+	ply
 
 	lda buffer+fileID+2,y
 	xba
@@ -927,7 +946,7 @@ file
 ; file type aux type logic.
 ; only support pdos encoding, nothing fancy.
 ; 'p' filetype aux type pdos
-; where filetype = 80bit, aux type = 16 bit big endian
+; where filetype = 8 bit, aux type = 16 bit big endian
 
 	stz ft
 	stz at
@@ -985,7 +1004,7 @@ startup proc
 ; read :system:start.gsos, load into memory @ $6800
 ; aux type is stored in auxtype
 
-	with dp, data
+	with zp, data
 
 ; assume 16-bit, etc.   
 
@@ -1013,26 +1032,34 @@ startup proc
 	with HFSMasterDirectoryBlock
 	lda #2
 	jsr read_block_abs
-	; can't really fail...
+	; shouldn't fail.
 	lda buffer+drAlBlSt
 	xba
-	sta block_offset
+	sta startingBlock
 
-	ldx #3*HFSExtentDescriptor.sizeof-2
-@cloop	lda buffer+drCTExtRec,x
+	lda buffer+drAlBlkSiz+1
 	xba
-	sta cat_extents,x
-	dex
-	dex
-	bpl @cloop
+	lsr a ; / 2
+	sta blockMultiplier
+
+; catalog extents
+	ldy #drCTExtRec ; offset
+	jsr extent_to_extent
+
+	lda #3*ExtendedExtent.sizeof-1
+	ldx #extents
+	ldy #cat_extents
+	mvn $00,$00
+	; a, x, y clobbered. 
 
 ; save the volume name while we're at it?
 
 	endwith
 
 ; find the root node.
-	lda cat_extents
-	jsr read_block
+	lda #0
+	ldx #0
+	jsr read_cat_block
 
 	with BTHeaderRec
 	lda buffer+BTNodeDescriptor.sizeof+rootNode+2
@@ -1187,5 +1214,90 @@ drv	str.w 'DRIVERS'
 gsos	str.w 'START.GS.OS'
 	dcb.b 1,0
 	endp
+
+
+multiply proc
+; inputs: m1 (16-bit), m2 (32-bit)
+; outputs: m3 (32-bit)
+; m1, m2 clobbered
+	with zp
+
+	stz m3
+	stz m3+2
+	lda m1
+	beq rts
+	lda m2
+	ora m3
+	beq rts
+
+loop
+	lsr m1
+	bcc next
+
+add	clc
+	lda m2
+	adc m3
+	sta m3
+	lda m2+2
+	adc m3+2
+	sta m3+2
+
+next	asl m2
+	rol m2+2
+	lda m1
+	bne loop	
+
+rts	rts
+	endp
+
+extent_to_extent proc
+	; y = offset into buffer.
+	; clobbers x, y
+	with zp, data
+	import multiply
+
+	ldx #0
+loop1
+	lda buffer,y
+	xba
+	sta extents,x
+	stz extents+2,x
+	iny
+	iny
+	inx
+	inx
+	inx
+	inx
+	cpx #3*4*2
+	blt loop1
+
+; now multiply...
+	lda blockMultiplier
+	dec a
+	beq rts
+
+	ldx #3*4*2-4
+loop2
+	lda blockMultiplier
+	sta m1
+	lda extents+0,x
+	sta m2
+	stz m2+2
+	jsr multiply
+	lda m3
+	sta extents+0,x
+	lda m3+2
+	sta extents+2,x
+
+	dex
+	dex
+	dex
+	dex
+	bpl loop2
+
+
+rts	rts
+	endp
+
 
 	end
