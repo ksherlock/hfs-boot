@@ -68,7 +68,7 @@ blockNumber	ds.b 2
 buffer	equ $2000
 
 
-	entry read_block, read_block_abs, read_extent_block
+	entry read_block_abs, read_extent_block
 	entry vector
 	entry extent_to_extent
 
@@ -151,6 +151,7 @@ ok
 	lda #buffer
 	sta pro.dataBuffer
 	endif
+	ldx #0
 	lda #2
 	jsr read_block_abs
 
@@ -350,8 +351,8 @@ blockNumber	dc.l	1 ; actually 24-bit
 	endif
 
 
-read_block proc
-	entry read_block_abs
+read_block_abs proc
+	entry read_block_abs_long
 	entry vector
 
 	; input
@@ -359,17 +360,19 @@ read_block proc
 	; will be adjusted for allocation block offset
 	;
 	with zp
-	clc
-	adc startingBlock
+;	clc
+;	adc startingBlock
 
-read_block_abs
+;read_block_abs
 
 	if __smartport__ then
 	sta sp.blockNumber
+	stx sp.blockNumber+2
 	else
 	sta pro.blockNumber
 	endif
 
+read_block_abs_long
 	php
 	sec
 	xce
@@ -387,36 +390,61 @@ vector	dc.w $ffff
 @fail	brk $ea
 	endp
 
+
+	macro
+	ifcs &p1,&p2
+	bcc @0
+	&p1 &p2
+@0
+	mend
+
 read_extent_block proc
 ; a = block #
 
 ; This doesn't check beyond the 3rd extent
 
-	with zp,ExtendedExtent
+	import read_block_abs_long
 
-; TODO - not yet 32-bit clean.
+	with zp,ExtendedExtent
 
 @0
 	cmp extents+(sizeof*0)+blockCount
 	bcs @1
 ;	clc
-	adc extents+(sizeof*0)+startBlock
-	bra read_block
+	ldx #sizeof*0+startBlock
+	bra found
 
 @1	sbc extents+(sizeof*0)+blockCount
 	cmp extents+(sizeof*1)+blockCount
 	bcs @2
 ;	clc
-	adc extents+(sizeof*1)+startBlock
-	bra read_block
+	ldx #sizeof*1+startBlock
+	bra found
 
 @2	sbc extents+(sizeof*1)+blockCount
 	cmp extents+(sizeof*2)+blockCount
 	bcs @3
-	adc extents+(sizeof*2)+startBlock
-	bra read_block
+	ldx #sizeof*2+startBlock
+	bra found
 
 @3	brk $ea
+
+found	;
+	clc
+	adc extents,x
+	sta sp.blockNumber
+	lda #0
+	adc extents+2,x
+	sta sp.blockNumber+2
+
+	clc
+	lda startingBlock
+	adc sp.blockNumber
+	sta sp.blockNumber
+	lda #0
+	adc sp.blockNumber+2
+	sta sp.blockNumber+2
+	bra read_block_abs_long
 	endp
 
 
@@ -457,7 +485,8 @@ rts	rts
 extent_to_extent proc
 	; y = offset into buffer.
 	; clobbers x, y
-	with zp
+	with zp,ExtendedExtent
+
 	import multiply
 
 	ldx #0
@@ -472,15 +501,15 @@ loop1
 	inx
 	inx
 	inx
-	cpx #3*4*2
+	cpx #sizeof*3
 	blt loop1
 
 ; now multiply...
 	lda blockMultiplier
 	dec a
-	beq rts
+	beq offset
 
-	ldx #3*4*2-4
+	ldx #sizeof*3-4
 loop2
 	lda blockMultiplier
 	sta m1
@@ -500,7 +529,35 @@ loop2
 	bpl loop2
 
 
-rts	rts
+offset
+	if 0 then
+; now add the block offset to the starting block.
+	lda startingBlock
+	clc
+	adc extents+(ExtendedExtent.sizeof*0)+startBlock
+	sta extents+(ExtendedExtent.sizeof*0)+startBlock
+	lda #0
+	adc extents+(ExtendedExtent.sizeof*0)+startBlock+2
+	sta extents+(ExtendedExtent.sizeof*0)+startBlock+2
+
+	lda startingBlock
+	clc
+	adc extents+(ExtendedExtent.sizeof*1)+startBlock
+	sta extents+(ExtendedExtent.sizeof*1)+startBlock
+	lda #0
+	adc extents+(ExtendedExtent.sizeof*1)+startBlock+2
+	sta extents+(ExtendedExtent.sizeof*1)+startBlock+2
+
+	lda startingBlock
+	clc
+	adc extents+(ExtendedExtent.sizeof*2)+startBlock
+	sta extents+(ExtendedExtent.sizeof*2)+startBlock
+	lda #0
+	adc extents+(ExtendedExtent.sizeof*2)+startBlock+2
+	sta extents+(ExtendedExtent.sizeof*2)+startBlock+2
+
+	endif
+	rts
 	endp
 
 

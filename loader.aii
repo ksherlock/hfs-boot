@@ -85,7 +85,7 @@ blockNumber	ds.b 2
 	endif
 
 
-	entry read_block, read_block_abs
+	entry read_block_abs, read_block_abs_long
 	entry prepare_path, cat_lookup
 	entry read_cat_block, read_file_block
 	entry extent_to_extent
@@ -181,6 +181,7 @@ getbootname proc
 	sta pro.dataBuffer
 	endif
 	lda #2
+	ldx #0
 	jsr read_block_abs
 
 	; restore the stack. does not affect a/carry
@@ -518,33 +519,50 @@ read_file_block proc
 	cmp file_extents+(sizeof*0)+blockCount
 	bcs @1
 ;	clc
-	adc file_extents+(sizeof*0)+startBlock
-	bra read_block
+	ldx #sizeof*0+startBlock
+	bra found
 
 @1	sbc file_extents+(sizeof*0)+blockCount
 	cmp file_extents+(sizeof*1)+blockCount
 	bcs @2
 ;	clc
-	adc file_extents+(sizeof*1)+startBlock
-	bra read_block
+	ldx #sizeof*1+startBlock
+	bra found
 
 @2	sbc file_extents+(sizeof*1)+blockCount
 	cmp file_extents+(sizeof*2)+blockCount
 	bcs @3
-	adc file_extents+(sizeof*2)+startBlock
-	bra read_block
+	ldx #sizeof*2+startBlock
+	bra found
 
 @3
 	lda #outOfRange ; too big
 	sec
 	rts
 
+
+found	;
+	clc
+	adc file_extents,x
+	sta sp.blockNumber
+	lda #0
+	adc file_extents+2,x
+	sta sp.blockNumber+2
+
+	clc
+	lda startingBlock
+	adc sp.blockNumber
+	sta sp.blockNumber
+	lda #0
+	adc sp.blockNumber+2
+	sta sp.blockNumber+2
+	bra read_block_abs_long
+
 	endp
 
 read_cat_block proc
 ; a = block #
 
-; TODO - not 32-bit clean yet.
 
 	with data,ExtendedExtent
 
@@ -552,52 +570,68 @@ read_cat_block proc
 	cmp cat_extents+(sizeof*0)+blockCount
 	bcs @1
 ;	clc
-	adc cat_extents+(sizeof*0)+startBlock
-	bra read_block
+	ldx #sizeof*0+startBlock
+	bra found
 
 @1	sbc cat_extents+(sizeof*0)+blockCount
 	cmp cat_extents+(sizeof*1)+blockCount
 	bcs @2
 ;	clc
-	adc cat_extents+(sizeof*1)+startBlock
-	bra read_block
+	ldx #sizeof*1+startBlock
+	bra found
 
 @2	sbc cat_extents+(sizeof*1)+blockCount
 	cmp cat_extents+(sizeof*2)+blockCount
 	bcs @3
-	adc cat_extents+(sizeof*2)+startBlock
-	bra read_block
+	ldx #sizeof*2+startBlock
+	bra found
 
 @3
 	lda #outOfRange ; too big
 	sec
 	rts
 
+found	;
+	clc
+	adc cat_extents,x
+	sta sp.blockNumber
+	lda #0
+	adc cat_extents+2,x
+	sta sp.blockNumber+2
+
+	clc
+	lda startingBlock
+	adc sp.blockNumber
+	sta sp.blockNumber
+	lda #0
+	adc sp.blockNumber+2
+	sta sp.blockNumber+2
+	bra read_block_abs_long
+
 	endp
 
 
 
 
-read_block proc
-	entry read_block_abs
+read_block_abs proc
+	entry read_block_abs_long
 	entry vector
 
 	; input
 	; a = hfs block #
 	; will be adjusted for allocation block offset
 	;
-	clc
-	adc data.startingBlock
-
-read_block_abs
-
+;	clc
+;	adc data.startingBlock
 
 	if __smartport__ then
 	sta sp.blockNumber
+	stx sp.blockNumber+2
 	else
 	sta pro.blockNumber
 	endif
 
+read_block_abs_long
 	php
 	sec
 	xce
@@ -622,8 +656,6 @@ vector	dc.w $ffff
 	and #$ff
 	sec
 	rts
-
-_stack	ds.w 1
 
 	endp
 
@@ -1031,6 +1063,7 @@ startup proc
 
 	with HFSMasterDirectoryBlock
 	lda #2
+	ldx #0
 	jsr read_block_abs
 	; shouldn't fail.
 	lda buffer+drAlBlSt
@@ -1058,7 +1091,6 @@ startup proc
 
 ; find the root node.
 	lda #0
-	ldx #0
 	jsr read_cat_block
 
 	with BTHeaderRec
