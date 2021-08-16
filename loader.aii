@@ -18,9 +18,24 @@
 
 __smartport__	set 1
 
+
+	if __smartport__ then
+	include 'smartport.aii'
+	endif
+
+;
+; 32-bit version large volumes.
+ExtendedExtent		RECORD 0
+startBlock		ds.l	1	; offset: $0 (0)	;  first allocation block 
+blockCount		ds.l	1	; offset: $4 (8)	;  number of allocation blocks 
+sizeof			EQU *		; size:   $8 (8)
+			ENDR
+
+
+
 buffer	equ $3000
 
-dp	record 0
+zp	record 0
 ptr	ds.l 1
 path	ds.l 1
 
@@ -38,25 +53,42 @@ at	ds.w 1
 st	ds.w 1
 file_id	ds.l 1
 
+
+
+extents		ds.b	3*ExtendedExtent.sizeof
+
+; multiplication stuff
+m1		ds.w	1
+m2		ds.l	1
+m3		ds.l	1
+
+
+
+; too much zp space...
+	if not __smartport__ and * >= $42 then
+	aerror 'too much zero-page space'
+	endif
+
 	endr
 
 
 
 
 	if not __smartport__ then
-pro	record $42
-cmd	ds.b 1
-unit	ds.b 1
-buffer	ds.b 2
-block	ds.b 2
-	endr
+pro		record $42
+cmd		ds.b 1
+unit		ds.b 1
+dataBuffer	ds.b 2
+blockNumber	ds.b 2
+		endr
 
 	endif
 
 
-	entry read_block, read_block_abs
+	entry read_block_abs, read_block_abs_long
 	entry prepare_path, cat_lookup
 	entry read_cat_block, read_file_block
+	entry extent_to_extent
 
 
 header	proc
@@ -82,10 +114,12 @@ data	record
 ;unit		dc.w 0
 ;vector		dc.w 0
 
-block_offset	dc.w 0
+startingBlock	dc.w 0
+blockMultiplier	dc.w 0
 
-cat_extents	dcb.w 6, 0
-file_extents	dcb.w 6, 0
+
+cat_extents	ds.b 3*ExtendedExtent.sizeof
+file_extents	ds.b 3*ExtendedExtent.sizeof
 
 cat_root	dc.w 0
 
@@ -106,21 +140,22 @@ cat_str		dcb.b 32, 0
 	endr
 
 	if __smartport__ then
-sp	record
-ReadBlock	equ $01
-pcount	dc.b	3
-unit	dc.b	1
-buffer	dc.w	$3000 ; name conflict...
-block	dc.l	0 ; actually 24-bit
-	endr
+sp		record
+pCount		dc.b	3
+unit		dc.b	1
+dataBuffer	dc.w	$3000 ; name conflict...
+blockNumber	dc.l	0 ; actually 24-bit
+		endr
 	endif
 
+
+_stack	ds.w 1
 
 getbootname proc
 	; getbootname(GSString *)
 	; return string needs a leading colon.
 
-	with dp
+	with zp
 
 	plx ; rts
 	ply
@@ -133,13 +168,26 @@ getbootname proc
 	phk
 	plb
 
+	; prepare the stack for emulation mode
+	tsx
+	stx _stack
+	ldx #$01ff ; should be enough space
+	txs
+
+
 ; get the volume name from the HFS MDB....
 	if not __smartport__ then
 	lda #buffer
-	sta pro.buffer
+	sta pro.dataBuffer
 	endif
 	lda #2
+	ldx #0
 	jsr read_block_abs
+
+	; restore the stack. does not affect a/carry
+	ldx _stack
+	txs
+
 	bcs exit	
 
 	with HFSMasterDirectoryBlock
@@ -176,7 +224,7 @@ exit
 getfstname proc
 	; getfstname(GSString *)
 
-	with dp
+	with zp
 
 	plx ; rts
 	ply
@@ -211,7 +259,7 @@ name	str.w 'hfs.fst'
 
 readfile proc
 ; (eof, aux type, file type) readfile(GSString *, void *)
-	with dp
+	with zp
 
 	plx ; rts
 	ply
@@ -228,12 +276,21 @@ readfile proc
 	phk
 	plb
 
+	; prepare the stack for emulation mode
+	tsx
+	stx _stack
+	ldx #$01ff ; should be enough space
+	txs
+
 
 	jsr prepare_path
 	bcs exit
 
 	jsr cat_lookup
 	bcs exit
+
+
+
 
 	; now read file, one block at a time,
 	; and copy to ptr.
@@ -243,7 +300,7 @@ readfile proc
 
 	if not __smartport__ then
 	lda #buffer
-	sta pro.buffer
+	sta pro.dataBuffer
 	endif
 	; need to re-set cmd/slot as well?
 
@@ -280,6 +337,9 @@ rdone
 
 ; ...
 
+	ldx _stack
+	txs
+
 	; stack: b, rts,
 	lda ft
 	sta 4,s
@@ -292,7 +352,12 @@ rdone
 
 	lda #0
 	clc
+	plb
+	rts
+
 exit
+	ldx _stack
+	txs
 	plb
 	rts
 
@@ -300,7 +365,7 @@ exit
 
 prepare_path proc
 	
-	with dp, data
+	with zp, data
 
 ; optimism
 	stz r0 ; offset into path
@@ -445,132 +510,150 @@ s3	dc.b 'xxSYSTEM:FSTS:'
 	endp
 
 
-read_block proc
-	entry read_block_abs
-	entry vector
-
-	; input
-	; a = hfs block #
-	; will be adjusted for allocation block offset
-	;
-	with dp
-	clc
-	adc data.block_offset
-
-read_block_abs
-
-
-	; todo -- need to save/restore dp and stack
-
-	if __smartport__ then
-	sta sp.block
-	else
-	sta pro.block
-	endif
-
-;
-; need to save/restore the stack.  start.gs.os will call w/ high stack
-;
-	tsc
-	sta _stack
-	lda #$01bf ; should be enough space
-	tcs
-
-	clc
-	php
-	sec
-	xce
-	dc.b $20 ; jsr
-vector	dc.w $ffff
-	if __smartport__ then
-	dc.b sp.ReadBlock
-	dc.w sp
-	endif
-
-	bcs @fail
-	xce
-	plp
-	lda _stack
-	tcs
-	lda #0
-	rts
-
-@fail	
-	clc
-	xce
-	plp
-	tax ; save
-	lda _stack
-	tcs	
-	sec
-	txa
-	and #$ff
-	rts
-
-_stack	ds.w 1
-
-	endp
-
-
 read_file_block proc
 ; a = block #
 
-	with data,HFSExtentDescriptor
+	with data,ExtendedExtent
 
 @0
-	cmp file_extents+0+blockCount
+	cmp file_extents+(sizeof*0)+blockCount
 	bcs @1
 ;	clc
-	adc file_extents+0+startBlock
-	bra read_block
+	ldx #sizeof*0+startBlock
+	bra found
 
-@1	sbc file_extents+0+blockCount
-	cmp file_extents+4+blockCount
+@1	sbc file_extents+(sizeof*0)+blockCount
+	cmp file_extents+(sizeof*1)+blockCount
 	bcs @2
 ;	clc
-	adc file_extents+4+startBlock
-	bra read_block
+	ldx #sizeof*1+startBlock
+	bra found
 
-@2	sbc file_extents+4+blockCount
-	cmp file_extents+8+blockCount
+@2	sbc file_extents+(sizeof*1)+blockCount
+	cmp file_extents+(sizeof*2)+blockCount
 	bcs @3
-	adc file_extents+8+startBlock
-	bra read_block
+	ldx #sizeof*2+startBlock
+	bra found
 
 @3
 	lda #outOfRange ; too big
 	sec
 	rts
+
+
+found	;
+	clc
+	adc file_extents,x
+	sta sp.blockNumber
+	lda #0
+	adc file_extents+2,x
+	sta sp.blockNumber+2
+
+	clc
+	lda startingBlock
+	adc sp.blockNumber
+	sta sp.blockNumber
+	lda #0
+	adc sp.blockNumber+2
+	sta sp.blockNumber+2
+	bra read_block_abs_long
 
 	endp
 
 read_cat_block proc
 ; a = block #
 
-	with data,HFSExtentDescriptor
+
+	with data,ExtendedExtent
 
 @0
-	cmp cat_extents+0+blockCount
+	cmp cat_extents+(sizeof*0)+blockCount
 	bcs @1
 ;	clc
-	adc cat_extents+0+startBlock
-	bra read_block
+	ldx #sizeof*0+startBlock
+	bra found
 
-@1	sbc cat_extents+0+blockCount
-	cmp cat_extents+4+blockCount
+@1	sbc cat_extents+(sizeof*0)+blockCount
+	cmp cat_extents+(sizeof*1)+blockCount
 	bcs @2
 ;	clc
-	adc cat_extents+4+startBlock
-	bra read_block
+	ldx #sizeof*1+startBlock
+	bra found
 
-@2	sbc cat_extents+4+blockCount
-	cmp cat_extents+8+blockCount
+@2	sbc cat_extents+(sizeof*1)+blockCount
+	cmp cat_extents+(sizeof*2)+blockCount
 	bcs @3
-	adc cat_extents+8+startBlock
-	bra read_block
+	ldx #sizeof*2+startBlock
+	bra found
 
 @3
 	lda #outOfRange ; too big
+	sec
+	rts
+
+found	;
+	clc
+	adc cat_extents,x
+	sta sp.blockNumber
+	lda #0
+	adc cat_extents+2,x
+	sta sp.blockNumber+2
+
+	clc
+	lda startingBlock
+	adc sp.blockNumber
+	sta sp.blockNumber
+	lda #0
+	adc sp.blockNumber+2
+	sta sp.blockNumber+2
+	bra read_block_abs_long
+
+	endp
+
+
+
+
+read_block_abs proc
+	entry read_block_abs_long
+	entry vector
+
+	; input
+	; a = hfs block #
+	; will be adjusted for allocation block offset
+	;
+;	clc
+;	adc data.startingBlock
+
+	if __smartport__ then
+	sta sp.blockNumber
+	stx sp.blockNumber+2
+	else
+	sta pro.blockNumber
+	endif
+
+read_block_abs_long
+	php
+	sec
+	xce
+	dc.b $20 ; jsr
+vector	dc.w $ffff
+	if __smartport__ then
+	dc.b Command.ReadBlock
+	dc.w sp
+	endif
+
+	bcs @fail
+	xce
+	plp
+	lda #0
+	clc
+	rts
+
+@fail	
+	clc
+	xce
+	plp
+	and #$ff
 	sec
 	rts
 
@@ -585,9 +668,9 @@ cat_lookup proc
 
 	with data
 
-bnum	equ dp.r0
-prev	equ dp.r1
-count	equ dp.r2
+bnum	equ zp.r0
+prev	equ zp.r1
+count	equ zp.r2
 
 	; search for a file and a parent directory.
 
@@ -795,7 +878,7 @@ match	proc
 ; a match!
 ; store the file type, aux type, eof, and extent pointers.
 
-	with dp, data
+	with zp, data
 
 	lda buffer+HFSCatalogKey.keyLength,y
 ;	and #$ff
@@ -830,7 +913,7 @@ folder
 	sta ft
 	lda #$0d
 	sta st ; storage type
-	ldx #12-2
+	ldx #3*ExtendedExtent.sizeof-2
 @eloop
 	stz file_extents,x
 	dex
@@ -871,30 +954,19 @@ file
 	lda #1
 	sta st ; storage type
 
-
-	lda buffer+dataExtents+0,y
-	xba
-	sta file_extents+0
-
-	lda buffer+dataExtents+2,y
-	xba
-	sta file_extents+2
-
-	lda buffer+dataExtents+4,y
-	xba
-	sta file_extents+4
-
-	lda buffer+dataExtents+6,y
-	xba
-	sta file_extents+6
-
-	lda buffer+dataExtents+8,y
-	xba
-	sta file_extents+8
-
-	lda buffer+dataExtents+10,y
-	xba
-	sta file_extents+10
+	phy ; save
+	tya
+	clc
+	adc #dataExtents
+	tay
+;	ldy #dataExtents
+	jsr extent_to_extent
+	lda #3*ExtendedExtent.sizeof-1
+	ldx #extents
+	ldy #file_extents
+	mvn $00,$00
+	; a, x, y clobbered.
+	ply
 
 	lda buffer+fileID+2,y
 	xba
@@ -906,7 +978,7 @@ file
 ; file type aux type logic.
 ; only support pdos encoding, nothing fancy.
 ; 'p' filetype aux type pdos
-; where filetype = 80bit, aux type = 16 bit big endian
+; where filetype = 8 bit, aux type = 16 bit big endian
 
 	stz ft
 	stz at
@@ -964,7 +1036,7 @@ startup proc
 ; read :system:start.gsos, load into memory @ $6800
 ; aux type is stored in auxtype
 
-	with dp, data
+	with zp, data
 
 ; assume 16-bit, etc.   
 
@@ -982,7 +1054,7 @@ startup proc
 
 	if not __smartport__ then
 	lda #buffer
-	sta pro.buffer
+	sta pro.dataBuffer
 	short m
 	lda #1
 	sta pro.cmd
@@ -991,27 +1063,35 @@ startup proc
 
 	with HFSMasterDirectoryBlock
 	lda #2
+	ldx #0
 	jsr read_block_abs
-	; can't really fail...
+	; shouldn't fail.
 	lda buffer+drAlBlSt
 	xba
-	sta block_offset
+	sta startingBlock
 
-	ldx #3*HFSExtentDescriptor.sizeof-2
-@cloop	lda buffer+drCTExtRec,x
+	lda buffer+drAlBlkSiz+1
 	xba
-	sta cat_extents,x
-	dex
-	dex
-	bpl @cloop
+	lsr a ; / 2
+	sta blockMultiplier
+
+; catalog extents
+	ldy #drCTExtRec ; offset
+	jsr extent_to_extent
+
+	lda #3*ExtendedExtent.sizeof-1
+	ldx #extents
+	ldy #cat_extents
+	mvn $00,$00
+	; a, x, y clobbered. 
 
 ; save the volume name while we're at it?
 
 	endwith
 
 ; find the root node.
-	lda cat_extents
-	jsr read_block
+	lda #0
+	jsr read_cat_block
 
 	with BTHeaderRec
 	lda buffer+BTNodeDescriptor.sizeof+rootNode+2
@@ -1113,9 +1193,9 @@ read
 
 	lda #$6800
 	if __smartport__ then
-	sta sp.buffer
+	sta sp.dataBuffer
 	else
-	sta pro.buffer
+	sta pro.dataBuffer
 	endif
 
 @loop	lda r0
@@ -1124,11 +1204,11 @@ read
 ;	clc
 	lda #512
 	if __smartport__ then
-	adc sp.buffer
-	sta sp.buffer
+	adc sp.dataBuffer
+	sta sp.dataBuffer
 	else
-	adc pro.buffer
-	sta pro.buffer
+	adc pro.dataBuffer
+	sta pro.dataBuffer
 	endif
 	inc r0
 	dec blocks
@@ -1140,9 +1220,9 @@ read
 
 	lda #buffer
 	if __smartport__ then
-	sta sp.buffer
+	sta sp.dataBuffer
 	else
-	sta pro.buffer ; kind of important...
+	sta pro.dataBuffer ; kind of important...
 	endif
 
 	lda #0
@@ -1166,5 +1246,90 @@ drv	str.w 'DRIVERS'
 gsos	str.w 'START.GS.OS'
 	dcb.b 1,0
 	endp
+
+
+multiply proc
+; inputs: m1 (16-bit), m2 (32-bit)
+; outputs: m3 (32-bit)
+; m1, m2 clobbered
+	with zp
+
+	stz m3
+	stz m3+2
+	lda m1
+	beq rts
+	lda m2
+	ora m3
+	beq rts
+
+loop
+	lsr m1
+	bcc next
+
+add	clc
+	lda m2
+	adc m3
+	sta m3
+	lda m2+2
+	adc m3+2
+	sta m3+2
+
+next	asl m2
+	rol m2+2
+	lda m1
+	bne loop	
+
+rts	rts
+	endp
+
+extent_to_extent proc
+	; y = offset into buffer.
+	; clobbers x, y
+	with zp, data
+	import multiply
+
+	ldx #0
+loop1
+	lda buffer,y
+	xba
+	sta extents,x
+	stz extents+2,x
+	iny
+	iny
+	inx
+	inx
+	inx
+	inx
+	cpx #3*4*2
+	blt loop1
+
+; now multiply...
+	lda blockMultiplier
+	dec a
+	beq rts
+
+	ldx #3*4*2-4
+loop2
+	lda blockMultiplier
+	sta m1
+	lda extents+0,x
+	sta m2
+	stz m2+2
+	jsr multiply
+	lda m3
+	sta extents+0,x
+	lda m3+2
+	sta extents+2,x
+
+	dex
+	dex
+	dex
+	dex
+	bpl loop2
+
+
+rts	rts
+	endp
+
 
 	end
